@@ -1,0 +1,14 @@
+{
+  "name": "Budget Duo",
+  "short_name": "Budget Duo",
+  "description": "Suivre nos revenus, charges, dépenses et épargne à deux.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f5",
+  "theme_color": "#0f766e",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

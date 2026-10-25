@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Budget Duo">
+  <title>Budget Duo</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="month-nav">
+      <button class="icon-btn" data-action="prev-month" aria-label="Mois précédent">‹</button>
+      <h1 id="month-label"></h1>
+      <button class="icon-btn" data-action="next-month" aria-label="Mois suivant">›</button>
+    </div>
+    <div class="view-switch" id="view-switch" role="tablist"></div>
+  </header>
+
+  <main id="screen"></main>
+
+  <button class="fab" data-action="add-expense" aria-label="Ajouter une dépense">+</button>
+
+  <nav class="tabbar" id="tabbar">
+    <button data-tab="home"><span>🏠</span>Accueil</button>
+    <button data-tab="tx"><span>🧾</span>Dépenses</button>
+    <button data-tab="plan"><span>📋</span>Budget</button>
+    <button data-tab="save"><span>🐷</span>Épargne</button>
+    <button data-tab="settings"><span>⚙️</span>Réglages</button>
+  </nav>
+
+  <dialog id="sheet"><form method="dialog" id="sheet-form"></form></dialog>
+  <div id="toast" role="status"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
