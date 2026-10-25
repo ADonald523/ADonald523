@@ -1,6 +1,6 @@
 // Cache de l'application pour qu'elle s'ouvre même sans réseau.
-const CACHE = 'budget-duo-v1';
-const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'calc.js', 'manifest.webmanifest', 'icon.svg'];
+const CACHE = 'budget-duo-v2';
+const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'calc.js', 'sync.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -15,8 +15,9 @@ self.addEventListener('activate', (e) => {
 });
 
 // Réseau d'abord (pour recevoir les mises à jour), cache si hors ligne.
+// Seuls les fichiers de l'appli passent par ici : Firebase gère son propre réseau.
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
+  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {

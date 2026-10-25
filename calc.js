@@ -117,3 +117,14 @@ export function mergeStates(a, b) {
   }
   return out;
 }
+
+// Empreinte d'une sauvegarde : deux états de même empreinte ont le même contenu
+// (toute modification change updatedAt). Sert à éviter les allers-retours inutiles.
+export function fingerprint(s) {
+  const parts = [`settings:${s.settings?.updatedAt || 0}`];
+  for (const col of COLLECTIONS) {
+    parts.push(col + ':' + (s[col] || []).map((it) => `${it.id}@${it.updatedAt || 0}`).sort().join(','));
+  }
+  parts.push('deleted:' + Object.keys(s.deleted || {}).sort().join(','));
+  return parts.join('|');
+}

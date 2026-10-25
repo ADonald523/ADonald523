@@ -1,4 +1,5 @@
 import { computeMonth, mergeStates, monthKey, shiftMonth, shareOf, activeIn, pad, COLLECTIONS } from './calc.js';
+import { firestoreAdapter, createSync, newCoupleCode, parseFirebaseConfig, encodeInvite, decodeInvite } from './sync.js';
 
 // ---------- Données de référence ----------
 
@@ -40,6 +41,7 @@ const cat = (id) => ALL_CATS[id] || { label: id || '—', emoji: '💸' };
 
 const DATA_KEY = 'budget-duo:data';
 const UI_KEY = 'budget-duo:ui';
+const SYNC_KEY = 'budget-duo:sync';
 
 const emptyState = () => ({
   version: 1,
@@ -63,7 +65,7 @@ const ui = { tab: 'home', view: 'all', ...load(UI_KEY, {}), month: monthKey() };
 function persist() {
   try {
     localStorage.setItem(DATA_KEY, JSON.stringify(state));
-    localStorage.setItem(UI_KEY, JSON.stringify({ tab: ui.tab, view: ui.view }));
+    localStorage.setItem(UI_KEY, JSON.stringify({ tab: ui.tab, view: ui.view, me: ui.me, lastOwner: ui.lastOwner }));
   } catch {
     toast('⚠️ Impossible d’enregistrer sur cet appareil');
   }
@@ -87,6 +89,7 @@ function remove(col, id) {
 
 function commit() {
   persist();
+  syncer?.changed();
   render();
 }
 
@@ -367,8 +370,10 @@ function renderSettings() {
     </form>
   </section>
 
-  <section class="card"><h2>Synchroniser entre vos deux téléphones</h2>
-    <p class="small">Les données restent sur ce téléphone (rien n’est envoyé sur internet). Pour être à jour tous les deux :</p>
+  ${renderSyncCard()}
+
+  <section class="card"><details><summary><strong>Sauvegarde manuelle (fichier)</strong></summary>
+    <p class="small">Sans synchro automatique, vous pouvez aussi vous échanger un fichier :</p>
     <ol class="steps small">
       <li>L’un appuie sur <strong>Envoyer mes données</strong> (WhatsApp, mail…)</li>
       <li>L’autre ouvre le fichier avec <strong>Importer et fusionner</strong></li>
@@ -376,7 +381,7 @@ function renderSettings() {
     </ol>
     <div class="btn-row"><button class="btn" data-action="export">Envoyer mes données</button>
     <label class="btn ghost" style="text-align:center">Importer et fusionner<input type="file" accept="application/json,.json" id="import-file" hidden></label></div>
-  </section>
+  </details></section>
 
   <section class="card"><h2>Les 5 règles pour finir le mois</h2>
     <div class="tip small"><strong>1. Regarder le « par jour », pas le solde.</strong> Le solde du compte ment : il ne montre pas le loyer qui tombe dans 10 jours.</div>
@@ -388,6 +393,70 @@ function renderSettings() {
 
   <section class="card"><h2>Données</h2>
     <button class="btn danger" data-action="reset">Tout effacer sur ce téléphone</button></section>`;
+}
+
+const FIRESTORE_RULES = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /couples/{code} {
+      allow get, create, update: if code.size() >= 20
+        && (request.resource == null || request.resource.data.json.size() < 1000000);
+    }
+  }
+}`;
+
+const SYNC_LABELS = {
+  connecting: '⏳ Connexion…',
+  syncing: '🔄 Synchronisation…',
+  ok: '🟢 Synchronisé',
+  offline: '🟠 Hors ligne — ça se synchronisera au retour du réseau',
+  error: '🔴 Erreur de synchro',
+};
+
+function syncStatusText() {
+  const { status, message } = syncInfo;
+  return `${SYNC_LABELS[status] || ''}${status === 'error' && message ? `<br><span class="muted">${esc(message)}</span>` : ''}`;
+}
+
+const namesWarning = () =>
+  state.settings.p1 === 'Moi' || state.settings.p2 === 'Ma copine'
+    ? '<div class="alert warn small">Mettez d’abord vos vrais prénoms dans « Vous deux » : « Moi » ne veut plus rien dire une fois sur deux téléphones.</div>'
+    : '';
+
+function renderSyncCard() {
+  if (syncCfg) {
+    const other = state.settings[ui.me === 'p2' ? 'p1' : 'p2'];
+    return `<section class="card"><h2>Synchro automatique</h2>
+      <p class="small" id="sync-status">${syncStatusText()}</p>
+      <p class="small">Chaque dépense ajoutée ici apparaît sur l’autre téléphone en quelques secondes.</p>
+      ${namesWarning()}
+      <div class="field"><span>Sur ce téléphone, je suis</span><div class="chips">${['p1', 'p2']
+        .map((p) => `<label><input type="radio" name="me" value="${p}" ${ui.me === p ? 'checked' : ''}><span>${esc(state.settings[p])}</span></label>`)
+        .join('')}</div></div>
+      <button class="btn" data-action="sync-invite">Inviter ${esc(other)} (envoyer le lien)</button>
+      <p class="muted small">Le lien donne accès à vos données : envoyez-le seulement à ${esc(other)}, en message privé.</p>
+      <button class="link-btn" data-action="sync-disable">Désactiver la synchro sur ce téléphone</button>
+    </section>`;
+  }
+  return `<section class="card"><h2>Synchro automatique</h2>
+    <p class="small">Pour voir tous les deux les mêmes chiffres, en temps réel. <strong>Si l’autre vous a envoyé un lien d’invitation, ouvrez-le simplement</strong> : rien d’autre à faire.</p>
+    ${namesWarning()}
+    <p class="small">Sinon, l’un de vous deux le met en place <strong>une seule fois</strong> (≈ 10 min, gratuit, sans carte bancaire) :</p>
+    <ol class="steps small">
+      <li>Aller sur <a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a> (compte Google) → <em>Créer un projet</em>, nom « budget-duo », Google Analytics inutile.</li>
+      <li>Menu <em>Créer → Firestore Database → Créer une base de données</em>, emplacement en Europe (ex. <code>eur3</code>), <em>mode production</em>.</li>
+      <li>Onglet <em>Règles</em> : tout remplacer par les règles ci-dessous → <em>Publier</em>.</li>
+      <li>⚙️ <em>Paramètres du projet</em> → en bas « Vos applications » → icône <strong>&lt;/&gt;</strong> (Web) → un nom → <em>Enregistrer</em>. Copier le bloc <code>firebaseConfig</code> affiché.</li>
+      <li>Le coller ci-dessous et appuyer sur <em>Activer</em>, puis envoyer le lien d’invitation à l’autre.</li>
+    </ol>
+    <details><summary class="small"><strong>Règles à coller (étape 3)</strong></summary>
+      <pre class="code">${esc(FIRESTORE_RULES)}</pre>
+      <button class="btn ghost" data-action="copy-rules">Copier les règles</button>
+    </details>
+    <label class="field" style="margin-top:12px"><span>Configuration Firebase (étape 4)</span>
+      <textarea id="firebase-config" rows="5" placeholder="const firebaseConfig = {&#10;  apiKey: &quot;…&quot;,&#10;  …&#10;};"></textarea></label>
+    <button class="btn" data-action="sync-enable">Activer la synchro</button>
+  </section>`;
 }
 
 function splitHint() {
@@ -410,7 +479,7 @@ function ownerOptions() {
   ];
 }
 const catOptions = (list) => list.map((c) => ({ value: c.id, label: `${c.emoji} ${c.label}` }));
-const defaultOwner = () => (ui.view === 'all' ? state.settings.lastOwner || 'p1' : ui.view);
+const defaultOwner = () => (ui.view === 'all' ? ui.lastOwner || ui.me || 'p1' : ui.view);
 
 function field(f, v) {
   const val = v ?? '';
@@ -492,7 +561,7 @@ function txForm(t) {
     ],
     values: { category: isIncome ? 'job' : 'courses', owner: defaultOwner(), date: defaultDate(), ...t },
     onSave: (d) => {
-      if (ui.view === 'all') state.settings.lastOwner = d.owner;
+      if (ui.view === 'all') ui.lastOwner = d.owner;
       upsert('transactions', { ...t, ...d, type: isIncome ? 'income' : 'expense' });
       toast(isIncome ? 'Rentrée ajoutée' : 'Dépense ajoutée');
     },
@@ -589,8 +658,34 @@ const ACTIONS = {
   export: exportData,
   reset: () => {
     if (confirm('Effacer toutes les données de ce téléphone ? (pensez à exporter avant)')) {
+      stopSync();
       state = emptyState();
       commit();
+    }
+  },
+  'copy-rules': () => copyText(FIRESTORE_RULES, 'Règles copiées'),
+  'sync-enable': () => {
+    const config = parseFirebaseConfig($('#firebase-config').value);
+    if (!config) return toast('Configuration non reconnue : collez tout le bloc firebaseConfig');
+    ui.me ||= 'p1';
+    saveSync({ config, code: newCoupleCode() });
+  },
+  'sync-invite': async () => {
+    const url = `${location.origin}${location.pathname}#join=${encodeInvite({ ...syncCfg, from: state.settings[ui.me || 'p1'] })}`;
+    const text = 'Rejoins notre budget 💸 (ouvre ce lien sur ton téléphone) :';
+    if (navigator.share) {
+      try {
+        return await navigator.share({ title: 'Budget Duo', text, url });
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+      }
+    }
+    copyText(url, 'Lien copié : envoie-le par message');
+  },
+  'sync-disable': () => {
+    if (confirm('Arrêter la synchro sur ce téléphone ? Les données restent ici, et l’autre garde les siennes.')) {
+      stopSync();
+      render();
     }
   },
 };
@@ -603,6 +698,11 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('input', (e) => {
+  if (e.target.name === 'me' && e.target.closest('#screen')) {
+    ui.me = e.target.value;
+    persist();
+    render();
+  }
   if (e.target.name === 'splitP1') {
     const v = Number(e.target.value);
     $('#split-out').textContent = `${v} % / ${100 - v} %`;
@@ -658,9 +758,92 @@ async function exportData() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ---------- Synchro automatique ----------
+
+let syncCfg = load(SYNC_KEY, null);
+let syncer = null;
+const syncInfo = { status: 'off', message: '' };
+
+function setSyncStatus(status, message = '') {
+  Object.assign(syncInfo, { status, message });
+  const el = document.getElementById('sync-status');
+  if (el) el.innerHTML = syncStatusText();
+}
+
+async function startSync() {
+  syncer?.stop();
+  syncer = null;
+  if (!syncCfg) return;
+  setSyncStatus('connecting');
+  try {
+    const adapter = await firestoreAdapter(syncCfg.config, syncCfg.code);
+    syncer = createSync(adapter, {
+      getState: () => state,
+      onRemote: (merged) => {
+        state = merged;
+        persist();
+        // Ne pas effacer un formulaire en cours de saisie dans les réglages.
+        if (!$('#screen').contains(document.activeElement) || document.activeElement === document.body) render();
+      },
+      onStatus: setSyncStatus,
+    });
+  } catch (err) {
+    setSyncStatus(navigator.onLine ? 'error' : 'offline', err?.message);
+    window.addEventListener('online', startSync, { once: true });
+  }
+}
+
+function saveSync(cfg) {
+  syncCfg = cfg;
+  try {
+    localStorage.setItem(SYNC_KEY, JSON.stringify(cfg));
+  } catch {}
+  persist();
+  render();
+  startSync();
+  toast('Synchro activée ✨');
+}
+
+function stopSync() {
+  syncer?.stop();
+  syncer = null;
+  syncCfg = null;
+  setSyncStatus('off');
+  try {
+    localStorage.removeItem(SYNC_KEY);
+  } catch {}
+}
+
+async function copyText(text, msg) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(msg);
+  } catch {
+    prompt('Copiez ce texte :', text);
+  }
+}
+
+// Ouverture d'un lien d'invitation : …/#join=…
+function handleInvite() {
+  if (!location.hash.startsWith('#join=')) return;
+  const invite = decodeInvite(location.hash.slice(6));
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!invite) return toast('Lien d’invitation invalide');
+  if (syncCfg?.code === invite.code) return toast('Déjà connecté à ce budget');
+  const who = invite.from ? ` de ${invite.from}` : '';
+  if (!confirm(`Rejoindre le budget partagé${who} ? Ce qui est déjà noté sur ce téléphone sera ajouté au budget commun.`)) return;
+  const inviter = ['p1', 'p2'].find((p) => state.settings[p] === invite.from);
+  ui.me = inviter === 'p1' || !inviter ? 'p2' : 'p1';
+  ui.tab = 'home';
+  saveSync({ config: invite.config, code: invite.code });
+}
+
 // ---------- Démarrage ----------
 
 render();
+handleInvite();
+window.addEventListener('hashchange', handleInvite);
+if (syncCfg && !syncer) startSync();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
