@@ -1,4 +1,4 @@
-import { computeMonth, mergeStates, monthKey, shiftMonth, shareOf, activeIn, pad, COLLECTIONS } from './calc.js';
+import { computeMonth, mergeStates, monthKey, shiftMonth, activeIn, pad, COLLECTIONS } from './calc.js';
 import { createSync } from './sync.js';
 import * as cloud from './cloud.js';
 
@@ -42,11 +42,10 @@ const cat = (id) => ALL_CATS[id] || { label: id || '—', emoji: '💸' };
 
 const DATA_KEY = 'budget-duo:data';
 const UI_KEY = 'budget-duo:ui';
-const JOIN_KEY = 'budget-duo:join';
 
 const emptyState = () => ({
   version: 1,
-  settings: { p1: 'Moi', p2: '', splitP1: 50, updatedAt: 0 },
+  settings: { name: '', updatedAt: 0 },
   incomes: [], charges: [], savingsPlans: [], budgets: [], goals: [], transactions: [],
   deleted: {},
 });
@@ -61,12 +60,14 @@ function load(key, fallback) {
 }
 
 let state = { ...emptyState(), ...load(DATA_KEY, {}) };
-const ui = { tab: 'home', view: 'all', ...load(UI_KEY, {}), month: monthKey() };
+// Anciennes versions : le prénom s'appelait `p1`.
+if (state.settings.name === undefined) state.settings = { name: state.settings.p1 === 'Moi' ? '' : state.settings.p1 || '', updatedAt: 0 };
+const ui = { tab: 'home', ...load(UI_KEY, {}), month: monthKey() };
 
 function persist() {
   try {
     localStorage.setItem(DATA_KEY, JSON.stringify(state));
-    localStorage.setItem(UI_KEY, JSON.stringify({ tab: ui.tab, view: ui.view, me: ui.me, lastOwner: ui.lastOwner }));
+    localStorage.setItem(UI_KEY, JSON.stringify({ tab: ui.tab }));
   } catch {
     toast('⚠️ Impossible d’enregistrer sur cet appareil');
   }
@@ -114,13 +115,6 @@ const parseAmount = (s) => {
 
 const today = () => new Date();
 const isoDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const ownerName = (o) => (o === 'shared' ? 'Commun' : state.settings[o] || o);
-const viewName = (v) => (v === 'all' ? 'Nous deux' : state.settings[v]);
-// Budget solo par défaut ; le partenaire est optionnel.
-const hasPartner = () => Boolean(state.settings.p2);
-// « · Prénom » sous un élément, seulement quand le budget est à deux.
-const who = (o) => (hasPartner() ? ` · ${esc(ownerName(o))}` : '');
-const inView = (item) => shareOf(item.owner, ui.view, state.settings.splitP1) > 0;
 
 function pct(part, whole) {
   return whole > 0 ? Math.round((part / whole) * 100) : 0;
@@ -147,14 +141,6 @@ function render() {
   const [y, m] = ui.month.split('-').map(Number);
   $('#month-label').textContent = new Date(y, m - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 
-  if (!hasPartner()) ui.view = 'all';
-  $('#view-switch').hidden = !hasPartner();
-  $('#view-switch').innerHTML = hasPartner()
-    ? ['all', 'p1', 'p2']
-      .map((v) => `<button role="tab" data-action="view" data-id="${v}" aria-selected="${ui.view === v}">${esc(viewName(v))}</button>`)
-      .join('')
-    : '';
-
   for (const b of document.querySelectorAll('#tabbar button')) b.classList.toggle('active', b.dataset.tab === ui.tab);
 
   const screens = { home: renderHome, tx: renderTransactions, plan: renderPlan, save: renderSavings, settings: renderSettings };
@@ -162,7 +148,7 @@ function render() {
 }
 
 function renderHome() {
-  const r = computeMonth(state, ui.month, ui.view);
+  const r = computeMonth(state, ui.month);
   const out = [];
 
   const steps = [
@@ -221,12 +207,12 @@ function renderHome() {
   </div>${r.available > 0 ? bar(r.spent, r.available) : ''}</section>`);
 
   const upcoming = state.charges
-    .filter((c) => activeIn(c, ui.month) && inView(c) && (!r.isCurrent || (c.day || 1) >= r.dayNow))
+    .filter((c) => activeIn(c, ui.month) && (!r.isCurrent || (c.day || 1) >= r.dayNow))
     .sort((a, b) => (a.day || 1) - (b.day || 1));
   if (upcoming.length && !r.isPast) {
-    out.push(`<section class="card"><h2>Prélèvements à venir <small>${money(upcoming.reduce((s, c) => s + shareAmount(c), 0))}</small></h2><ul class="list">${upcoming
+    out.push(`<section class="card"><h2>Prélèvements à venir <small>${money(upcoming.reduce((s, c) => s + amountOf(c), 0))}</small></h2><ul class="list">${upcoming
       .slice(0, 6)
-      .map((c) => `<li><div class="emoji">${cat(c.category).emoji}</div><div class="grow"><div class="title">${esc(c.label)}</div><div class="muted small">le ${c.day || 1}${who(c.owner)}</div></div><div class="amount">${money(shareAmount(c))}</div></li>`)
+      .map((c) => `<li><div class="emoji">${cat(c.category).emoji}</div><div class="grow"><div class="title">${esc(c.label)}</div><div class="muted small">le ${c.day || 1}</div></div><div class="amount">${money(amountOf(c))}</div></li>`)
       .join('')}</ul></section>`);
   }
 
@@ -244,11 +230,11 @@ function renderHome() {
   return out.join('');
 }
 
-const shareAmount = (it) => (Number(it.amount) || 0) * shareOf(it.owner, ui.view, state.settings.splitP1);
+const amountOf = (it) => Number(it.amount) || 0;
 
 function monthTransactions() {
   return state.transactions
-    .filter((t) => t.date.startsWith(ui.month) && inView(t))
+    .filter((t) => t.date.startsWith(ui.month))
     .sort((a, b) => b.date.localeCompare(a.date) || (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
@@ -257,8 +243,8 @@ function txRow(t) {
   const isIncome = t.type === 'income';
   return `<li><button class="row" data-action="edit-tx" data-id="${t.id}">
     <div class="emoji">${c.emoji}</div>
-    <div class="grow"><div class="title">${esc(t.note || c.label)}</div><div class="muted small">${esc(c.label)}${who(t.owner)}</div></div>
-    <div class="amount ${isIncome ? 'pos' : ''}">${money(isIncome ? shareAmount(t) : -shareAmount(t))}</div>
+    <div class="grow"><div class="title">${esc(t.note || c.label)}</div><div class="muted small">${esc(c.label)}</div></div>
+    <div class="amount ${isIncome ? 'pos' : ''}">${money(isIncome ? amountOf(t) : -amountOf(t))}</div>
   </button></li>`;
 }
 
@@ -267,7 +253,7 @@ function renderTransactions() {
   const head = `<div class="btn-row"><button class="btn" data-action="add-expense">+ Dépense</button><button class="btn ghost" data-action="add-extra-income">+ Rentrée d’argent</button></div>`;
   if (!list.length) return head + `<div class="empty">Aucune dépense notée ce mois-ci.<br>Le secret : noter <strong>tout</strong>, même le café à 1,50 €.</div>`;
 
-  const r = computeMonth(state, ui.month, ui.view);
+  const r = computeMonth(state, ui.month);
   const groups = new Map();
   for (const t of list) {
     if (!groups.has(t.date)) groups.set(t.date, []);
@@ -289,18 +275,18 @@ function recurringList(col, items, emptyText) {
   return `<ul class="list">${items
     .map((it) => `<li><button class="row" data-action="edit-${col}" data-id="${it.id}">
       <div class="emoji">${cat(it.category).emoji}</div>
-      <div class="grow"><div class="title">${esc(it.label || cat(it.category).label)}</div><div class="muted small">${[hasPartner() && esc(ownerName(it.owner)), it.day && `le ${it.day}`].filter(Boolean).join(' · ') || '&nbsp;'}</div></div>
-      <div class="amount">${money(shareAmount(it))}</div>
+      <div class="grow"><div class="title">${esc(it.label || cat(it.category).label)}</div><div class="muted small">${it.day ? `le ${it.day}` : '&nbsp;'}</div></div>
+      <div class="amount">${money(amountOf(it))}</div>
     </button></li>`)
     .join('')}</ul>`;
 }
 
 function renderPlan() {
-  const r = computeMonth(state, ui.month, ui.view);
-  const mine = (col) => state[col].filter((x) => activeIn(x, ui.month) && inView(x)).sort((a, b) => (a.day || 0) - (b.day || 0) || shareAmount(b) - shareAmount(a));
-  const recurringIncome = mine('incomes').reduce((s, x) => s + shareAmount(x), 0);
+  const r = computeMonth(state, ui.month);
+  const mine = (col) => state[col].filter((x) => activeIn(x, ui.month)).sort((a, b) => (a.day || 0) - (b.day || 0) || amountOf(b) - amountOf(a));
+  const recurringIncome = mine('incomes').reduce((s, x) => s + amountOf(x), 0);
   const budgets = mine('budgets');
-  const budgeted = budgets.reduce((s, b) => s + shareAmount(b), 0);
+  const budgeted = budgets.reduce((s, b) => s + amountOf(b), 0);
   const free = r.available - budgeted;
 
   const chargePct = pct(r.charges, r.income);
@@ -330,8 +316,8 @@ function renderPlan() {
     ${budgets.length ? `<ul class="list">${budgets
       .map((b) => {
         const spent = r.byCategory[b.category]?.spent || 0;
-        const total = r.byCategory[b.category]?.budget || shareAmount(b);
-        return `<li><button class="row" data-action="edit-budgets" data-id="${b.id}"><div class="emoji">${cat(b.category).emoji}</div><div class="grow"><div class="flow-row"><span class="title">${esc(cat(b.category).label)}</span><span class="small muted">${money(shareAmount(b))}${who(b.owner)}</span></div>${bar(spent, total)}</div></button></li>`;
+        const total = r.byCategory[b.category]?.budget || amountOf(b);
+        return `<li><button class="row" data-action="edit-budgets" data-id="${b.id}"><div class="emoji">${cat(b.category).emoji}</div><div class="grow"><div class="flow-row"><span class="title">${esc(cat(b.category).label)}</span><span class="small muted">${money(amountOf(b))}</span></div>${bar(spent, total)}</div></button></li>`;
       })
       .join('')}</ul>` : ''}
     <div class="flow-row small" style="margin-top:8px"><span class="muted">Non réparti</span><span class="${free < 0 ? 'neg' : ''}">${money(free)}</span></div>
@@ -340,10 +326,10 @@ function renderPlan() {
 }
 
 function renderSavings() {
-  const plans = state.savingsPlans.filter((p) => activeIn(p, ui.month) && inView(p));
-  const goals = state.goals.filter(inView);
-  const monthly = plans.reduce((s, p) => s + shareAmount(p), 0);
-  const fixed = computeMonth(state, ui.month, ui.view).charges;
+  const plans = state.savingsPlans.filter((p) => activeIn(p, ui.month));
+  const goals = state.goals;
+  const monthly = plans.reduce((s, p) => s + amountOf(p), 0);
+  const fixed = computeMonth(state, ui.month).charges;
 
   return `
   <section class="card"><h2>Épargne automatique <small>${money(monthly)} / mois</small></h2>
@@ -356,7 +342,7 @@ function renderSavings() {
       .map((g) => `<li><div class="emoji">🎯</div><div class="grow">
         <div class="flow-row"><button class="link-btn" style="padding:0;color:inherit;font-weight:600" data-action="edit-goal" data-id="${g.id}">${esc(g.name)}</button><span class="small muted">${money(g.saved || 0)} / ${money(g.target)}</span></div>
         ${bar(g.saved || 0, g.target)}
-        <div class="flow-row small muted" style="margin-top:4px"><span>${pct(g.saved || 0, g.target)} %${who(g.owner)}</span><button class="link-btn" data-action="feed-goal" data-id="${g.id}">+ / − argent</button></div>
+        <div class="flow-row small muted" style="margin-top:4px"><span>${pct(g.saved || 0, g.target)} %</span><button class="link-btn" data-action="feed-goal" data-id="${g.id}">+ / − argent</button></div>
       </div></li>`)
       .join('')}</ul>` : '<p class="muted small">Un objectif motive : vacances, permis, fonds d’urgence…</p>'}
     <button class="link-btn" data-action="add-goal">+ Nouvel objectif</button></section>
@@ -370,28 +356,18 @@ function renderSavings() {
 function renderSettings() {
   const s = state.settings;
   return `
+  ${renderAccountCard()}
+
   <section class="card"><h2>Profil</h2>
     <form id="settings-form">
-      <label class="field"><span>${hasPartner() ? 'Prénom 1' : 'Votre prénom'}</span><input name="p1" value="${esc(s.p1)}" maxlength="20"></label>
-      <label class="field"><span>Budget à deux ? Prénom du/de la partenaire <em>(optionnel)</em></span>
-        <input name="p2" value="${esc(s.p2)}" maxlength="20" placeholder="Laisser vide pour un budget solo"></label>
-      ${hasPartner() ? `<label class="field"><span>Partage des dépenses communes : <strong id="split-out">${s.splitP1} % / ${100 - s.splitP1} %</strong></span>
-        <input name="splitP1" type="range" min="0" max="100" step="5" value="${s.splitP1}"></label>
-      <p class="muted small">Astuce : partager au prorata des revenus est souvent plus juste que 50/50.${splitHint()}</p>` : ''}
+      <label class="field"><span>Votre prénom</span><input name="name" value="${esc(s.name)}" maxlength="20" autocomplete="given-name"></label>
       <button class="btn" type="submit">Enregistrer</button>
     </form>
   </section>
 
-  ${renderAccountCard()}
-
   <section class="card"><details><summary><strong>Sauvegarde manuelle (fichier)</strong></summary>
-    <p class="small">Exporter vos données dans un fichier (sauvegarde, ou échange avec un autre téléphone sans compte) :</p>
-    <ol class="steps small">
-      <li>L’un appuie sur <strong>Envoyer mes données</strong> (WhatsApp, mail…)</li>
-      <li>L’autre ouvre le fichier avec <strong>Importer et fusionner</strong></li>
-      <li>Puis l’inverse, pour que les deux aient tout</li>
-    </ol>
-    <div class="btn-row"><button class="btn" data-action="export">Envoyer mes données</button>
+    <p class="small">Exportez vos données dans un fichier pour les garder ou les transférer sur un autre appareil sans compte.</p>
+    <div class="btn-row"><button class="btn" data-action="export">Exporter mes données</button>
     <label class="btn ghost" style="text-align:center">Importer et fusionner<input type="file" accept="application/json,.json" id="import-file" hidden></label></div>
   </details></section>
 
@@ -424,8 +400,7 @@ function renderAccountCard() {
   if (!cloud.cloudEnabled) return '';
   if (!account.user) {
     return `<section class="card"><h2>Compte</h2>
-      <p class="small">Créez un compte gratuit pour <strong>sauvegarder</strong> votre budget, le retrouver sur <strong>tous vos appareils</strong> et, si vous voulez, le <strong>partager avec votre partenaire</strong>.</p>
-      ${loadPendingJoin() ? '<div class="alert good small">Connectez-vous ou créez un compte pour rejoindre le budget partagé auquel vous avez été invité·e.</div>' : ''}
+      <p class="small">Créez un compte gratuit pour <strong>sauvegarder</strong> votre budget et le retrouver sur <strong>tous vos appareils</strong>.</p>
       <button class="btn ghost" data-action="auth-google">Continuer avec Google</button>
       <p class="muted small" style="text-align:center;margin:10px 0">ou avec un e-mail</p>
       <form id="auth-form">
@@ -436,52 +411,21 @@ function renderAccountCard() {
       <button class="link-btn" data-action="auth-reset">Mot de passe oublié ?</button>
     </section>`;
   }
-  const shared = account.members.length >= 2;
-  const other = state.settings[ui.me === 'p2' ? 'p1' : 'p2'] || 'votre partenaire';
-  const partner = shared
-    ? `<div class="alert good small"><strong>👫 Budget partagé avec ${esc(other)}</strong>Chaque dépense ajoutée apparaît chez l’autre en quelques secondes.</div>
-      <div class="field"><span>Sur ce compte, je suis</span><div class="chips">${['p1', 'p2']
-        .map((p) => `<label><input type="radio" name="me" value="${p}" ${ui.me === p ? 'checked' : ''}><span>${esc(state.settings[p])}</span></label>`)
-        .join('')}</div></div>
-      <button class="link-btn" data-action="budget-leave">Quitter le budget partagé</button>`
-    : `<h3 style="margin:14px 0 4px;font-size:.95rem">Budget à deux</h3>
-      <p class="small">Invitez votre partenaire : chacun note ses dépenses sur son téléphone, vous voyez tout ensemble.</p>
-      <button class="btn" data-action="budget-invite">Inviter mon/ma partenaire</button>`;
   return `<section class="card"><h2>Mon compte</h2>
     <p class="small"><strong>${esc(account.user.email || account.user.displayName || '')}</strong><br><span id="sync-status">${syncStatusText()}</span></p>
-    ${partner}
     <div class="btn-row"><button class="btn ghost" data-action="auth-signout">Se déconnecter</button></div>
     <button class="link-btn" style="color:var(--bad)" data-action="auth-delete">Supprimer mon compte</button>
   </section>`;
-}
-
-function splitHint() {
-  const inc = (o) => state.incomes.filter((i) => i.owner === o && activeIn(i, ui.month)).reduce((s, i) => s + i.amount, 0);
-  const a = inc('p1');
-  const b = inc('p2');
-  if (!a || !b) return '';
-  return ` Avec vos revenus actuels : <strong>${pct(a, a + b)} % / ${100 - pct(a, a + b)} %</strong>.`;
 }
 
 // ---------- Formulaires (feuille du bas) ----------
 
 let currentForm = null;
 
-function ownerOptions() {
-  return [
-    { value: 'p1', label: state.settings.p1 },
-    { value: 'p2', label: state.settings.p2 },
-    { value: 'shared', label: '👫 Commun' },
-  ];
-}
-const ownerField = (label) =>
-  hasPartner() ? { name: 'owner', label, type: 'chips', options: ownerOptions() } : { name: 'owner', type: 'hidden' };
 const catOptions = (list) => list.map((c) => ({ value: c.id, label: `${c.emoji} ${c.label}` }));
-const defaultOwner = () => (ui.view === 'all' ? ui.lastOwner || ui.me || 'p1' : ui.view);
 
 function field(f, v) {
   const val = v ?? '';
-  if (f.type === 'hidden') return `<input type="hidden" name="${f.name}" value="${esc(val)}">`;
   if (f.type === 'chips') {
     return `<div class="field"><span>${f.label}</span><div class="chips">${f.options
       .map((o) => `<label><input type="radio" name="${f.name}" value="${esc(o.value)}" ${String(o.value) === String(val) ? 'checked' : ''} required><span>${esc(o.label)}</span></label>`)
@@ -507,7 +451,7 @@ function openForm({ title, fields, values = {}, onSave, onDelete }) {
     </div>`;
   const dlg = $('#sheet');
   dlg.showModal();
-  const first = dlg.querySelector('.amount-input') || dlg.querySelector('input:not([type=hidden])');
+  const first = dlg.querySelector('.amount-input') || dlg.querySelector('input');
   if (first && !values.id) first.focus();
 }
 
@@ -554,13 +498,11 @@ function txForm(t) {
     fields: [
       { name: 'amount', label: 'Montant (€)', type: 'amount' },
       { name: 'category', label: isIncome ? 'Type' : 'Catégorie', type: 'chips', options: catOptions(isIncome ? INCOME_KINDS : EXPENSE_CATS) },
-      ownerField('Qui ?'),
       { name: 'date', label: 'Date', type: 'date' },
       { name: 'note', label: 'Note (optionnel)', type: 'text', placeholder: isIncome ? 'ex. heures sup, remboursement…' : 'ex. Lidl, McDo, cinéma…' },
     ],
-    values: { category: isIncome ? 'job' : 'courses', owner: defaultOwner(), date: defaultDate(), ...t },
+    values: { category: isIncome ? 'job' : 'courses', date: defaultDate(), ...t },
     onSave: (d) => {
-      if (ui.view === 'all') ui.lastOwner = d.owner;
       upsert('transactions', { ...t, ...d, type: isIncome ? 'income' : 'expense' });
       toast(isIncome ? 'Rentrée ajoutée' : 'Dépense ajoutée');
     },
@@ -573,13 +515,12 @@ function recurringForm(col, item, { title, cats, labelHint, withDay = true }) {
     { name: 'amount', label: 'Montant par mois (€)', type: 'amount' },
     { name: 'category', label: 'Type', type: 'chips', options: catOptions(cats) },
     { name: 'label', label: 'Nom (optionnel)', type: 'text', placeholder: labelHint },
-    ownerField('À qui ?'),
   ];
   if (withDay) fields.push({ name: 'day', label: 'Jour du mois', type: 'day', placeholder: 'ex. 5' });
   openForm({
     title: item?.id ? `Modifier` : title,
     fields,
-    values: { category: cats[0].id, owner: defaultOwner(), ...item },
+    values: { category: cats[0].id, ...item },
     onSave: (d) => upsert(col, { from: ui.month, ...item, ...d }),
     onDelete: item?.id ? () => remove(col, item.id) : null,
   });
@@ -594,9 +535,8 @@ const FORMS = {
     fields: [
       { name: 'amount', label: 'Montant par mois (€)', type: 'amount' },
       { name: 'category', label: 'Catégorie', type: 'chips', options: catOptions(EXPENSE_CATS) },
-      ownerField('Pour qui ?'),
     ],
-    values: { category: 'courses', owner: defaultOwner(), ...it },
+    values: { category: 'courses', ...it },
     onSave: (d) => upsert('budgets', { from: ui.month, ...it, ...d }),
     onDelete: it?.id ? () => remove('budgets', it.id) : null,
   }),
@@ -605,9 +545,8 @@ const FORMS = {
     fields: [
       { name: 'name', label: 'Objectif', type: 'text', placeholder: 'ex. Vacances d’été' },
       { name: 'amount', label: 'Montant visé (€)', type: 'amount' },
-      ownerField('Pour qui ?'),
     ],
-    values: { owner: 'shared', amount: g?.target, ...g },
+    values: { amount: g?.target, ...g },
     onSave: ({ amount, ...d }) => upsert('goals', { saved: 0, ...g, ...d, name: d.name || 'Objectif', target: amount }),
     onDelete: g?.id ? () => remove('goals', g.id) : null,
   }),
@@ -620,7 +559,6 @@ const find = (col, id) => state[col].find((x) => x.id === id);
 const ACTIONS = {
   'prev-month': () => { ui.month = shiftMonth(ui.month, -1); render(); },
   'next-month': () => { ui.month = shiftMonth(ui.month, 1); render(); },
-  view: (id) => { ui.view = id; persist(); render(); },
   tab: (id) => { ui.tab = id; persist(); render(); window.scrollTo(0, 0); },
   'add-expense': () => txForm(),
   'add-extra-income': () => txForm({ type: 'income' }),
@@ -651,8 +589,8 @@ const ACTIONS = {
     });
   },
   'emergency-goal': () => {
-    const fixed = computeMonth(state, ui.month, 'all').charges;
-    upsert('goals', { name: 'Fonds d’urgence', target: Math.max(300, Math.round(fixed)), saved: 0, owner: 'shared' });
+    const fixed = computeMonth(state, ui.month).charges;
+    upsert('goals', { name: 'Fonds d’urgence', target: Math.max(300, Math.round(fixed)), saved: 0 });
   },
   export: exportData,
   reset: () => {
@@ -683,59 +621,11 @@ const ACTIONS = {
   'auth-delete': () => {
     if (!confirm('Supprimer définitivement votre compte et vos données en ligne ? Cette action est irréversible.')) return;
     withBusy(async () => {
-      const { user, profile, members } = account;
-      await cloud.deleteAccount(user.uid, profile.budgetId, members);
+      await cloud.deleteAccount(account.user.uid);
       disconnect();
       state = emptyState();
       commit();
       toast('Compte supprimé');
-    });
-  },
-  'budget-invite': () => {
-    const me = ui.me || 'p1';
-    const other = me === 'p1' ? 'p2' : 'p1';
-    if (!state.settings[other] || state.settings[me] === 'Moi') {
-      // Il faut vos deux prénoms : « Moi » n'a plus de sens sur le téléphone de l'autre.
-      return openForm({
-        title: 'Budget à deux',
-        fields: [
-          { name: 'mine', label: 'Votre prénom', type: 'text' },
-          { name: 'theirs', label: 'Prénom de la personne invitée', type: 'text' },
-        ],
-        values: { mine: state.settings[me] === 'Moi' ? '' : state.settings[me], theirs: state.settings[other] },
-        onSave: ({ mine, theirs }) => {
-          if (!mine || !theirs) return toast('Entrez les deux prénoms');
-          state.settings = { ...state.settings, [me]: mine, [other]: theirs, updatedAt: Date.now() };
-          commit();
-          ACTIONS['budget-invite']();
-        },
-      });
-    }
-    withBusy(async () => {
-      const invite = await cloud.createInvite(account.profile.budgetId);
-      const url = `${location.origin}${location.pathname}#join=${invite}`;
-      const text = `${state.settings[ui.me || 'p1']} t’invite à partager son budget sur Budget Duo 💸`;
-      if (navigator.share) {
-        try {
-          return await navigator.share({ title: 'Budget Duo', text, url });
-        } catch (err) {
-          if (err.name === 'AbortError') return;
-        }
-      }
-      copyText(url, 'Lien copié : envoyez-le par message');
-    });
-  },
-  'budget-leave': () => {
-    if (!confirm('Quitter le budget partagé ? Vous gardez une copie de vos données dans un budget perso.')) return;
-    withBusy(async () => {
-      const copy = { ...state, settings: { ...state.settings, p1: state.settings[ui.me || 'p1'], p2: '', updatedAt: Date.now() } };
-      stopSync();
-      account.profile = await cloud.leaveBudget(account.user.uid, account.profile.budgetId, copy);
-      account.members = [account.user.uid];
-      state = copy;
-      ui.me = 'p1';
-      commit();
-      await connectBudget();
     });
   },
 };
@@ -745,19 +635,6 @@ document.addEventListener('click', (e) => {
   if (tab) return ACTIONS.tab(tab.dataset.tab);
   const el = e.target.closest('[data-action]');
   if (el && ACTIONS[el.dataset.action]) ACTIONS[el.dataset.action](el.dataset.id);
-});
-
-document.addEventListener('input', (e) => {
-  if (e.target.name === 'me' && e.target.closest('#screen')) {
-    ui.me = e.target.value;
-    persist();
-    render();
-    if (account.user) cloud.saveProfile(account.user.uid, { ...account.profile, me: ui.me }).catch(() => {});
-  }
-  if (e.target.name === 'splitP1') {
-    const v = Number(e.target.value);
-    $('#split-out').textContent = `${v} % / ${100 - v} %`;
-  }
 });
 
 document.addEventListener('submit', (e) => {
@@ -771,13 +648,7 @@ document.addEventListener('submit', (e) => {
   if (e.target.id !== 'settings-form') return;
   e.preventDefault();
   const fd = new FormData(e.target);
-  state.settings = {
-    ...state.settings,
-    p1: String(fd.get('p1')).trim() || 'Moi',
-    p2: String(fd.get('p2') || '').trim(),
-    splitP1: fd.has('splitP1') ? Number(fd.get('splitP1')) : state.settings.splitP1,
-    updatedAt: Date.now(),
-  };
+  state.settings = { ...state.settings, name: String(fd.get('name')).trim(), updatedAt: Date.now() };
   commit();
   toast('Enregistré');
 });
@@ -798,7 +669,7 @@ document.addEventListener('change', async (e) => {
 });
 
 async function exportData() {
-  const name = `budget-duo-${(state.settings.p1 || 'moi').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${isoDate(today())}.json`;
+  const name = `budget-duo-${(state.settings.name || 'moi').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${isoDate(today())}.json`;
   const blob = new Blob([JSON.stringify(state)], { type: 'application/json' });
   const file = new File([blob], name, { type: 'application/json' });
   if (navigator.canShare?.({ files: [file] })) {
@@ -818,7 +689,7 @@ async function exportData() {
 
 // ---------- Compte & synchro ----------
 
-const account = { user: null, profile: null, members: [] };
+const account = { user: null };
 let syncer = null;
 const syncInfo = { status: 'off', message: '' };
 let busy = false;
@@ -858,7 +729,7 @@ async function connectBudget() {
   stopSync();
   setSyncStatus('connecting');
   try {
-    const adapter = await cloud.budgetAdapter(account.profile.budgetId);
+    const adapter = await cloud.userAdapter(account.user.uid);
     syncer = createSync(adapter, {
       getState: () => state,
       onRemote: (merged) => {
@@ -875,88 +746,21 @@ async function connectBudget() {
 
 function disconnect() {
   stopSync();
-  Object.assign(account, { user: null, profile: null, members: [] });
+  account.user = null;
   setSyncStatus('off');
 }
-
-cloud.watchMembers((members) => {
-  const changed = members.length !== account.members.length;
-  account.members = members;
-  if (changed && ui.tab === 'settings') safeRender();
-});
 
 async function onSignedIn(user) {
   if (account.user?.uid === user.uid) return;
   account.user = user;
-  try {
-    let profile = await cloud.getProfile(user.uid);
-    const invite = loadPendingJoin();
-    if (invite) {
-      savePendingJoin(null);
-      const budgetId = invite.split('.')[0];
-      if (profile?.budgetId !== budgetId && confirm('Rejoindre le budget partagé ? Ce que vous avez déjà noté y sera ajouté.')) {
-        profile = await cloud.joinBudget(user.uid, invite);
-        ui.tab = 'home';
-        toast('Budget partagé rejoint 🎉');
-      }
-    }
-    // Premier passage : le budget du compte est créé avec ce qui est déjà noté ici.
-    account.profile = profile || (await cloud.createBudget(user.uid, state, 'p1'));
-    ui.me = account.profile.me || 'p1';
-    persist();
-    render();
-    await connectBudget();
-  } catch (err) {
-    toast(cloud.errorMessage(err));
-    setSyncStatus('error', cloud.errorMessage(err));
-    render();
-  }
-}
-
-function loadPendingJoin() {
-  return load(JOIN_KEY, null);
-}
-
-function savePendingJoin(invite) {
-  try {
-    if (invite) localStorage.setItem(JOIN_KEY, JSON.stringify(invite));
-    else localStorage.removeItem(JOIN_KEY);
-  } catch {}
-}
-
-async function copyText(text, msg) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast(msg);
-  } catch {
-    prompt('Copiez ce texte :', text);
-  }
-}
-
-// Ouverture d'un lien d'invitation : …/#join=<budgetId>.<jeton>
-function handleInvite() {
-  if (!location.hash.startsWith('#join=')) return;
-  const invite = location.hash.slice(6);
-  history.replaceState(null, '', location.pathname + location.search);
-  if (!cloud.cloudEnabled || !/^[\w-]+\.[\w-]{20,}$/.test(invite)) return toast('Lien d’invitation invalide');
-  savePendingJoin(invite);
-  if (account.user) {
-    // Déjà connecté : on rejoue la connexion pour traiter l'invitation.
-    const user = account.user;
-    disconnect();
-    onSignedIn(user);
-  } else {
-    ui.tab = 'settings';
-    render();
-    toast('Connectez-vous pour rejoindre le budget');
-  }
+  render();
+  // Premier passage : ce qui est déjà noté sur l'appareil part dans le compte.
+  await connectBudget();
 }
 
 // ---------- Démarrage ----------
 
 render();
-handleInvite();
-window.addEventListener('hashchange', handleInvite);
 if (cloud.cloudEnabled) {
   cloud.onUser((user) => {
     if (user) onSignedIn(user);

@@ -1,7 +1,7 @@
 # Budget Duo 💸
 
 Une application web (installable sur téléphone) pour **arrêter d'être à sec avant la fin du mois** :
-suivre ses revenus, ses charges fixes, ses dépenses et son épargne, **seul·e ou à deux**.
+suivre ses revenus, ses charges fixes, ses dépenses et son épargne. Chaque utilisateur a son compte et son budget privé.
 
 ## L'idée
 
@@ -25,8 +25,7 @@ Et elle prévient : *« À ce rythme, vous serez à sec vers le 18 »*.
 - **Dépenses** : ajout en 3 secondes avec le bouton `+`, par catégorie.
 - **Budget** : revenus, charges fixes, enveloppes (courses, sorties…), avec des repères (charges ≤ 50 %, épargne ≈ 10 %).
 - **Épargne** : virements automatiques prévus et objectifs (fonds d'urgence, vacances…).
-- **Solo par défaut, à deux en option** : on ajoute un·e partenaire, les dépenses communes sont partagées (50/50 ou au prorata), avec une vue par personne.
-- **Comptes** (e-mail ou Google) : sauvegarde dans le cloud, synchro en temps réel entre appareils, **invitation du/de la partenaire par lien**.
+- **Comptes** (e-mail ou Google) : budget sauvegardé dans le cloud et synchronisé en temps réel sur tous les appareils de l'utilisateur.
 - Marche **sans compte** (données sur le téléphone) et **hors ligne**.
 - **Suppression de compte** et des données en un clic (RGPD).
 
@@ -57,12 +56,11 @@ pour l'application**, créé une seule fois par l'éditeur (pas par les utilisat
 7. Commit + push : les utilisateurs voient la carte **Compte** dans *Réglages*.
 
 ### Sécurité des données
-- Un utilisateur ne peut lire et modifier **que son budget** (`users/{uid}` → `budgets/{id}`, accès réservé aux `members`).
-- On ne rejoint un budget qu'avec le **jeton secret** du lien d'invitation, et **2 personnes maximum** par budget.
-- Personne ne peut lister les budgets des autres.
+- Chaque utilisateur a **un document privé** (`users/{uid}`) : lui seul peut le lire, le modifier ou le supprimer.
+- Personne ne peut lister les comptes ni lire les données d'un autre.
 
-Les règles sont testées avec l'émulateur Firebase : lecture, listing et tentatives d'intrusion
-(mauvais jeton, budget déjà complet) sont refusés.
+Les règles sont testées avec l'émulateur Firebase (lecture, écriture et listing par un autre compte
+ou sans compte : refusés).
 
 ## Développement
 
@@ -81,17 +79,17 @@ Pour tester les comptes sans toucher à la prod, lancer l'émulateur Firebase
 | Fichier | Rôle |
 |---|---|
 | `index.html`, `styles.css` | Interface (mobile d'abord, mode sombre auto) |
-| `app.js` | Écrans, formulaires, stockage local, compte, invitations |
+| `app.js` | Écrans, formulaires, stockage local, compte |
 | `calc.js` | Calculs purs (reste à vivre, budget/jour, projection, fusion) |
-| `sync.js` | Synchro d'un budget entre appareils (fusion sans conflit, hors ligne) |
-| `cloud.js` | Comptes Firebase (Auth) et budgets (Firestore) |
+| `sync.js` | Synchro du budget entre appareils (fusion sans conflit, hors ligne) |
+| `cloud.js` | Comptes Firebase (Auth) et données (Firestore) |
 | `firebase-config.js` | Configuration Firebase de l'application (`null` = mode local) |
 | `firestore.rules`, `firebase.json` | Règles de sécurité et configuration de l'émulateur |
 | `sw.js`, `manifest.webmanifest`, `icon.svg` | Installation sur téléphone + hors ligne |
 | `tests/` | Tests (`node --test`) |
 
 ## Limites connues / suite
-- Un budget = un document Firestore (1 Mo max, soit plusieurs milliers de dépenses : des années d'usage).
+- Un utilisateur = un document Firestore (1 Mo max, soit plusieurs milliers de dépenses : des années d'usage).
   Pour une grosse base d'utilisateurs, passer à un document par dépense.
 - Pas encore de connexion bancaire automatique (agrégateurs DSP2 type Powens ou Bridge : payants, avec contrat).
 - Pour les stores (App Store / Play Store) : empaqueter la PWA avec Capacitor.

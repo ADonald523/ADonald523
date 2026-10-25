@@ -1,4 +1,4 @@
-// Synchronisation d'un budget entre appareils (et entre partenaires).
+// Synchronisation du budget entre les appareils d'un même compte.
 // `adapter` donne accès au document distant : subscribe(onData, onError) et transact(update).
 import { mergeStates, fingerprint } from './calc.js';
 
@@ -54,10 +54,4 @@ export function createSync(adapter, { getState, onRemote, onStatus }) {
       globalThis.removeEventListener?.('online', onOnline);
     },
   };
-}
-
-// Jeton aléatoire (invitations) : 24 caractères, impossible à deviner.
-export function randomToken() {
-  const bytes = crypto.getRandomValues(new Uint8Array(18));
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_');
 }

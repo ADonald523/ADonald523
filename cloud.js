@@ -1,11 +1,8 @@
 // Comptes utilisateurs et budgets dans le cloud (Firebase Auth + Firestore).
 //
-// Modèle :
-//   users/{uid}         { budgetId, me }      → le budget de l'utilisateur, et qui il est dedans (p1/p2)
-//   budgets/{budgetId}  { members: [uid…], json, updatedAt, inviteToken?, joinWith? }
-// Les règles (firestore.rules) limitent la lecture/écriture d'un budget à ses membres.
+// Modèle : un document privé par utilisateur, users/{uid} = { json, updatedAt }.
+// Les règles (firestore.rules) n'autorisent que son propriétaire à le lire ou l'écrire.
 import { FIREBASE_CONFIG } from './firebase-config.js';
-import { randomToken } from './sync.js';
 
 const SDK = 'https://www.gstatic.com/firebasejs/10.14.1';
 export const cloudEnabled = Boolean(FIREBASE_CONFIG);
@@ -44,7 +41,7 @@ const MESSAGES = {
   'auth/network-request-failed': 'Pas de connexion internet.',
   'auth/popup-closed-by-user': 'Connexion annulée.',
   'auth/requires-recent-login': 'Par sécurité, reconnectez-vous puis réessayez.',
-  'permission-denied': 'Accès refusé (lien d’invitation expiré ou budget déjà complet ?).',
+  'permission-denied': 'Accès refusé : reconnectez-vous.',
 };
 export const errorMessage = (err) => MESSAGES[err?.code] || err?.message || 'Erreur inconnue';
 
@@ -78,79 +75,24 @@ export async function signOut() {
   return auth.signOut(a);
 }
 
-export async function getProfile(uid) {
-  const { fs, db } = await load();
-  const snap = await fs.getDoc(fs.doc(db, 'users', uid));
-  return snap.exists() && snap.data().budgetId ? snap.data() : null;
-}
-
-export async function saveProfile(uid, profile) {
-  const { fs, db } = await load();
-  await fs.setDoc(fs.doc(db, 'users', uid), profile);
-}
-
-// Nouveau budget dont l'utilisateur est l'unique membre, rempli avec `localState`.
-export async function createBudget(uid, localState, me) {
-  const { fs, db } = await load();
-  const ref = fs.doc(fs.collection(db, 'budgets'));
-  await fs.setDoc(ref, { members: [uid], json: JSON.stringify(localState), updatedAt: fs.serverTimestamp() });
-  const profile = { budgetId: ref.id, me };
-  await saveProfile(uid, profile);
-  return profile;
-}
-
-let onMembers = null;
-export const watchMembers = (cb) => {
-  onMembers = cb;
-};
-
 // Même interface que le faux serveur des tests : subscribe() + transact().
-export async function budgetAdapter(budgetId) {
+// Au premier passage le document n'existe pas : la synchro y envoie les données déjà notées.
+export async function userAdapter(uid) {
   const { fs, db } = await load();
-  const ref = fs.doc(db, 'budgets', budgetId);
+  const ref = fs.doc(db, 'users', uid);
   const parse = (snap) => (snap.exists() ? JSON.parse(snap.data().json) : null);
   return {
-    subscribe: (onData, onError) => fs.onSnapshot(ref, (snap) => {
-      onData(parse(snap));
-      onMembers?.(snap.exists() ? snap.data().members : []);
-    }, onError),
+    subscribe: (onData, onError) => fs.onSnapshot(ref, (snap) => onData(parse(snap)), onError),
     transact: (update) => fs.runTransaction(db, async (tx) => {
       const next = update(parse(await tx.get(ref)));
-      tx.update(ref, { json: JSON.stringify(next), updatedAt: fs.serverTimestamp() });
+      tx.set(ref, { json: JSON.stringify(next), updatedAt: fs.serverTimestamp() });
     }),
   };
 }
 
-// Lien d'invitation : …/#join=<budgetId>.<jeton>
-export async function createInvite(budgetId) {
-  const { fs, db } = await load();
-  const token = randomToken();
-  await fs.updateDoc(fs.doc(db, 'budgets', budgetId), { inviteToken: token });
-  return `${budgetId}.${token}`;
-}
-
-export async function joinBudget(uid, invite) {
-  const { fs, db } = await load();
-  const [budgetId, token] = invite.split('.');
-  await fs.updateDoc(fs.doc(db, 'budgets', budgetId), { members: fs.arrayUnion(uid), joinWith: token });
-  const profile = { budgetId, me: 'p2' };
-  await fs.setDoc(fs.doc(db, 'users', uid), profile);
-  return profile;
-}
-
-// Quitter un budget partagé : on repart sur un budget perso avec une copie des données.
-export async function leaveBudget(uid, budgetId, localState) {
-  const { fs, db } = await load();
-  await fs.updateDoc(fs.doc(db, 'budgets', budgetId), { members: fs.arrayRemove(uid) });
-  return createBudget(uid, localState, 'p1');
-}
-
-// Suppression du compte (RGPD) : budget supprimé si on en est le seul membre.
-export async function deleteAccount(uid, budgetId, members) {
+// Suppression du compte et de ses données (RGPD).
+export async function deleteAccount(uid) {
   const { fs, db, a } = await load();
-  const ref = fs.doc(db, 'budgets', budgetId);
-  if (members.length <= 1) await fs.deleteDoc(ref);
-  else await fs.updateDoc(ref, { members: fs.arrayRemove(uid) });
   await fs.deleteDoc(fs.doc(db, 'users', uid));
   await a.currentUser.delete();
 }

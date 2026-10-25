@@ -16,16 +16,7 @@ export function daysInMonth(key) {
   return new Date(y, m, 0).getDate();
 }
 
-// Part d'un élément attribuée à la vue courante.
-// owner : 'p1' | 'p2' | 'shared' ; view : 'all' | 'p1' | 'p2'
-export function shareOf(owner, view, splitP1 = 50) {
-  if (view === 'all' || owner === view) return 1;
-  if (owner === 'shared') return view === 'p1' ? splitP1 / 100 : 1 - splitP1 / 100;
-  return 0;
-}
-
-const sumShare = (items, view, split) =>
-  items.reduce((s, it) => s + (Number(it.amount) || 0) * shareOf(it.owner, view, split), 0);
+const sum = (items) => items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
 
 // Un élément récurrent (revenu, charge, épargne) s'applique-t-il à ce mois ?
 export function activeIn(item, key) {
@@ -34,22 +25,21 @@ export function activeIn(item, key) {
   return true;
 }
 
-export function computeMonth(state, key, view = 'all', today = new Date()) {
-  const split = state.settings?.splitP1 ?? 50;
+export function computeMonth(state, key, today = new Date()) {
   const tx = state.transactions.filter((t) => t.date.startsWith(key));
 
-  const recurringIncome = sumShare(state.incomes.filter((i) => activeIn(i, key)), view, split);
-  const extraIncome = sumShare(tx.filter((t) => t.type === 'income'), view, split);
+  const recurringIncome = sum(state.incomes.filter((i) => activeIn(i, key)));
+  const extraIncome = sum(tx.filter((t) => t.type === 'income'));
   const income = recurringIncome + extraIncome;
 
-  const charges = sumShare(state.charges.filter((c) => activeIn(c, key)), view, split);
-  const savings = sumShare(state.savingsPlans.filter((p) => activeIn(p, key)), view, split);
+  const charges = sum(state.charges.filter((c) => activeIn(c, key)));
+  const savings = sum(state.savingsPlans.filter((p) => activeIn(p, key)));
 
   // « Reste à vivre » : ce qui reste pour les dépenses du quotidien.
   const available = income - charges - savings;
 
   const expenses = tx.filter((t) => t.type !== 'income');
-  const spent = sumShare(expenses, view, split);
+  const spent = sum(expenses);
   const remaining = available - spent;
 
   const total = daysInMonth(key);
@@ -73,13 +63,13 @@ export function computeMonth(state, key, view = 'all', today = new Date()) {
 
   const byCategory = {};
   for (const t of expenses) {
-    const v = (Number(t.amount) || 0) * shareOf(t.owner, view, split);
+    const v = Number(t.amount) || 0;
     if (!v) continue;
     byCategory[t.category] ??= { spent: 0, budget: 0 };
     byCategory[t.category].spent += v;
   }
-  for (const b of state.budgets) {
-    const v = (Number(b.amount) || 0) * shareOf(b.owner, view, split);
+  for (const b of state.budgets.filter((x) => activeIn(x, key))) {
+    const v = Number(b.amount) || 0;
     if (!v) continue;
     byCategory[b.category] ??= { spent: 0, budget: 0 };
     byCategory[b.category].budget += v;
@@ -92,7 +82,7 @@ export function computeMonth(state, key, view = 'all', today = new Date()) {
   };
 }
 
-// Fusion de deux sauvegardes (téléphone de l'un + export de l'autre).
+// Fusion de deux sauvegardes (deux appareils, ou un fichier importé).
 // Chaque élément a un id et un updatedAt ; les suppressions sont gardées
 // dans `deleted` pour ne pas réapparaître après une fusion.
 export const COLLECTIONS = ['incomes', 'charges', 'savingsPlans', 'budgets', 'goals', 'transactions'];

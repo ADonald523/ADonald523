@@ -1,7 +1,7 @@
 {
   "name": "Budget Duo",
   "short_name": "Budget Duo",
-  "description": "Suivre nos revenus, charges, dépenses et épargne à deux.",
+  "description": "Suivre ses revenus, charges, dépenses et épargne pour finir le mois.",
   "lang": "fr",
   "start_url": "./",
   "scope": "./",

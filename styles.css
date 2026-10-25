@@ -58,17 +58,6 @@ button { cursor: pointer; }
   border: 0; background: var(--card); width: 40px; height: 40px; border-radius: 50%;
   font-size: 1.4rem; box-shadow: var(--shadow);
 }
-.view-switch {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
-  background: var(--card); border-radius: 12px; padding: 4px; margin-top: 8px;
-  box-shadow: var(--shadow);
-}
-.view-switch button {
-  border: 0; background: transparent; padding: 6px 4px; border-radius: 9px;
-  font-size: .9rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.view-switch button[aria-selected="true"] { background: var(--accent); color: #fff; font-weight: 600; }
-@media (prefers-color-scheme: dark) { .view-switch button[aria-selected="true"] { color: #062b27; } }
 
 main { max-width: 640px; margin: 0 auto; padding: 4px 16px 24px; }
 
@@ -209,4 +198,3 @@ code { font-size: .85em; background: var(--bg); padding: 1px 4px; border-radius:
 a { color: var(--accent); }
 .busy { cursor: progress; }
 .busy main button, .busy main .btn { opacity: .6; pointer-events: none; }
-.view-switch[hidden] { display: none; }

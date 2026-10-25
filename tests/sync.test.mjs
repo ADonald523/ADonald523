@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSync, randomToken } from '../sync.js';
+import { createSync } from '../sync.js';
 
 // Faux Firestore : un document partagé, notifications asynchrones comme le vrai.
 function fakeServer() {
@@ -25,7 +25,7 @@ function fakeServer() {
 }
 
 const empty = (name) => ({
-  version: 1, settings: { p1: name, p2: '', splitP1: 50, updatedAt: 0 },
+  version: 1, settings: { name, updatedAt: 0 },
   incomes: [], charges: [], savingsPlans: [], budgets: [], goals: [], transactions: [], deleted: {},
 });
 
@@ -44,10 +44,10 @@ function device(server, name) {
 const settle = () => new Promise((r) => setTimeout(r, 1500));
 const ids = (d) => d.state.transactions.map((t) => t.id).sort();
 
-test('deux téléphones convergent, suppressions comprises, sans boucle infinie', async () => {
+test('deux appareils convergent, suppressions comprises, sans boucle infinie', async () => {
   const server = fakeServer();
-  const a = device(server, 'Donald');
-  const b = device(server, 'Elle');
+  const a = device(server, 'téléphone');
+  const b = device(server, 'ordinateur');
   a.add('transactions', { id: 't1', amount: 10 });
   b.add('transactions', { id: 't2', amount: 20 });
   await settle();
@@ -65,10 +65,4 @@ test('deux téléphones convergent, suppressions comprises, sans boucle infinie'
   assert.equal(a.status, 'ok');
   a.sync.stop();
   b.sync.stop();
-});
-
-test('jetons d’invitation aléatoires', () => {
-  const a = randomToken();
-  assert.match(a, /^[\w-]{24}$/);
-  assert.notEqual(a, randomToken());
 });
