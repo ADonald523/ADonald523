@@ -1,6 +1,7 @@
 import { computeMonth, mergeStates, monthKey, shiftMonth, activeIn, pad, COLLECTIONS } from './calc.js';
 import { createSync } from './sync.js';
 import * as cloud from './cloud.js';
+import { buildPlan, suggestSavings } from './plan.js';
 
 // ---------- Données de référence ----------
 
@@ -24,10 +25,12 @@ const CHARGE_CATS = [
   { id: 'assurance', label: 'Assurance / mutuelle', emoji: '🛡️' },
   { id: 'navigo', label: 'Abonnement transport', emoji: '🚇' },
   { id: 'streaming', label: 'Abonnements (Netflix, Spotify…)', emoji: '📺' },
+  { id: 'sport', label: 'Salle de sport', emoji: '🏋️' },
   { id: 'credit', label: 'Crédit / remboursement', emoji: '🏦' },
   { id: 'chargeautre', label: 'Autre charge', emoji: '📄' },
 ];
 const INCOME_KINDS = [
+  { id: 'salaire', label: 'Salaire', emoji: '🏢' },
   { id: 'alternance', label: 'Alternance', emoji: '🎓' },
   { id: 'job', label: 'Petit job', emoji: '💼' },
   { id: 'aides', label: 'CAF / APL / bourse', emoji: '🏛️' },
@@ -158,7 +161,17 @@ function renderHome() {
     [state.budgets.length, 'Fixez des enveloppes (courses, sorties…)', 'add-budget'],
     [state.transactions.length, 'Notez chaque dépense avec le bouton +', 'add-expense'],
   ];
-  if (steps.some(([ok]) => !ok)) {
+  if (!state.incomes.length && !state.charges.length) {
+    out.push(`<section class="card"><h2>Faites votre bilan</h2>
+      <p class="small">Répondez à quelques questions (2 minutes) : l’appli construit votre budget et vous dit combien vous pouvez dépenser par jour.</p>
+      <button class="btn" data-action="wizard">Commencer le bilan</button></section>`);
+  } else if (state.settings.onboarded) {
+    if (!state.transactions.length) {
+      out.push(`<section class="card"><h2>Dernière étape ✍️</h2>
+        <p class="small">À chaque achat, appuyez sur <strong>+</strong> et notez-le (10 secondes). C’est ce qui permet à l’appli de vous prévenir avant d’être à sec.</p>
+        <button class="btn" data-action="add-expense">Noter ma première dépense</button></section>`);
+    }
+  } else if (steps.some(([ok]) => !ok)) {
     out.push(`<section class="card"><h2>Pour bien démarrer</h2><ol class="steps">${steps
       .map(([ok, text, action]) => `<li class="${ok ? 'done' : ''}">${ok ? text : `<button class="link-btn" data-action="${action}">${text}</button>`}</li>`)
       .join('')}</ol></section>`);
@@ -173,7 +186,7 @@ function renderHome() {
   if (r.isCurrent) {
     heroSub = r.remaining > 0
       ? `soit <strong>${money(r.perDay)} / jour</strong> pendant ${r.daysLeft} jour${r.daysLeft > 1 ? 's' : ''}`
-      : 'Le budget du mois est dépassé';
+      : r.remaining < 0 ? 'Le budget du mois est dépassé' : '';
   } else if (r.isPast) {
     heroLabel = 'Bilan du mois';
     heroSub = r.remaining >= 0 ? 'Mois terminé dans le vert 👏' : 'Mois terminé dans le rouge';
@@ -363,6 +376,7 @@ function renderSettings() {
       <label class="field"><span>Votre prénom</span><input name="name" value="${esc(s.name)}" maxlength="20" autocomplete="given-name"></label>
       <button class="btn" type="submit">Enregistrer</button>
     </form>
+    <button class="btn ghost" style="margin-top:8px" data-action="wizard">Refaire mon bilan</button>
   </section>
 
   <section class="card"><details><summary><strong>Sauvegarde manuelle (fichier)</strong></summary>
@@ -557,6 +571,19 @@ const FORMS = {
 const find = (col, id) => state[col].find((x) => x.id === id);
 
 const ACTIONS = {
+  wizard: () => openWizard(),
+  'wiz-next': () => wizardGo(1),
+  'wiz-prev': () => wizardGo(-1),
+  'wiz-skip': () => {
+    state.settings = { ...state.settings, onboarded: true, updatedAt: Date.now() };
+    closeWizard();
+    commit();
+  },
+  'wiz-login': () => {
+    closeWizard();
+    ACTIONS.tab('settings');
+  },
+  'wiz-apply': () => applyPlan(),
   'prev-month': () => { ui.month = shiftMonth(ui.month, -1); render(); },
   'next-month': () => { ui.month = shiftMonth(ui.month, 1); render(); },
   tab: (id) => { ui.tab = id; persist(); render(); window.scrollTo(0, 0); },
@@ -687,6 +714,223 @@ async function exportData() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ---------- Questionnaire de départ ----------
+
+let wiz = null; // { step, answers }
+
+const SITUATIONS = [
+  { value: 'etudiant', label: '🎒 Étudiant·e' },
+  { value: 'alternant', label: '🎓 Alternant·e' },
+  { value: 'salarie', label: '💼 Salarié·e' },
+  { value: 'autre', label: '✨ Autre' },
+];
+
+const getPath = (obj, path) => path.split('.').reduce((o, k) => o?.[k], obj);
+function setPath(obj, path, value) {
+  const keys = path.split('.');
+  const last = keys.pop();
+  keys.reduce((o, k) => (o[k] ??= {}), obj)[last] = value;
+}
+
+function wizAmount(path, label, hint = '') {
+  const [group, id] = path.split('.');
+  const v = getPath(wiz.answers, path);
+  return `<label class="wiz-row"><span>${cat(id).emoji} ${label}${hint ? `<small>${hint}</small>` : ''}</span>
+    <input data-path="${path}" data-group="${group}" inputmode="decimal" placeholder="0" autocomplete="off" value="${v ? String(v).replace('.', ',') : ''}"><b>€</b></label>`;
+}
+
+const wizTotal = (group, label) =>
+  `<div class="wiz-total"><span>${label}</span><span id="wiz-total" data-group="${group}">${money(sumGroup(group))}</span></div>`;
+const sumGroup = (group) => Object.values(wiz.answers[group] || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+
+const WIZ_STEPS = [
+  () => `<h2>Faisons le point en 2 minutes 👋</h2>
+    <p class="lead">Quelques questions sur votre argent. À la fin, l’appli construit votre budget et vous dit <strong>combien vous pouvez dépenser par jour</strong> pour tenir jusqu’à la fin du mois.</p>
+    <label class="field"><span>Votre prénom</span><input data-path="name" maxlength="20" autocomplete="given-name" value="${esc(wiz.answers.name || '')}"></label>
+    <div class="field"><span>Vous êtes…</span><div class="chips">${SITUATIONS
+      .map((o) => `<label><input type="radio" name="situation" data-path="situation" value="${o.value}" ${wiz.answers.situation === o.value ? 'checked' : ''}><span>${o.label}</span></label>`)
+      .join('')}</div></div>
+    <p class="muted small">🔒 Vos réponses restent sur votre téléphone (ou dans votre compte si vous en créez un).</p>
+    ${cloud.cloudEnabled && !account.user ? '<button class="link-btn" data-action="wiz-login">Déjà un compte ? Se connecter</button>' : ''}`,
+
+  () => {
+    const salaire = { alternant: 'Salaire d’alternance', etudiant: 'Salaire / alternance', salarie: 'Salaire' }[wiz.answers.situation] || 'Salaire';
+    return `<h2>Combien gagnez-vous par mois ?</h2>
+    <p class="lead">Les montants qui arrivent vraiment sur votre compte (net). Laissez vide ce qui ne vous concerne pas.</p>
+    ${wizAmount('incomes.salaire', salaire)}
+    ${wizAmount('incomes.job', 'Petit job, missions')}
+    ${wizAmount('incomes.aides', 'CAF, APL, bourse')}
+    ${wizAmount('incomes.famille', 'Aide de la famille')}
+    ${wizAmount('incomes.revenuautre', 'Autre revenu')}
+    ${wizTotal('incomes', 'Total par mois')}
+    <label class="wiz-row"><span>📅 Jour de paie <small>Pour savoir quand le mois recommence</small></span>
+      <input data-path="payDay" type="number" min="1" max="31" inputmode="numeric" placeholder="ex. 28" value="${esc(wiz.answers.payDay || '')}"></label>`;
+  },
+
+  () => `<h2>Votre logement</h2>
+    <p class="lead">Ce que vous payez chaque mois pour vous loger.</p>
+    ${wizAmount('charges.loyer', 'Loyer', 'Si l’APL est versée au propriétaire : le reste à payer')}
+    ${wizAmount('charges.energie', 'Électricité / gaz')}
+    ${wizAmount('charges.internet', 'Box internet')}
+    ${wizAmount('charges.assurance', 'Assurance habitation / mutuelle')}
+    ${wizTotal('charges', 'Charges fixes jusqu’ici')}`,
+
+  () => `<h2>Vos abonnements et prélèvements</h2>
+    <p class="lead">Astuce : ouvrez votre appli bancaire et regardez tout ce qui part automatiquement chaque mois.</p>
+    ${wizAmount('charges.telephone', 'Forfait téléphone')}
+    ${wizAmount('charges.navigo', 'Abonnement transport', 'Navigo, bus, train…')}
+    ${wizAmount('charges.streaming', 'Netflix, Spotify, Disney+…')}
+    ${wizAmount('charges.sport', 'Salle de sport')}
+    ${wizAmount('charges.credit', 'Crédit, paiement en plusieurs fois')}
+    ${wizAmount('charges.chargeautre', 'Autre prélèvement')}
+    ${wizTotal('charges', 'Total charges fixes')}`,
+
+  () => `<h2>Et au quotidien, vous dépensez à peu près…</h2>
+    <p class="lead">Par mois. Une estimation suffit : c’est souvent ici que l’argent part sans qu’on s’en rende compte.</p>
+    ${wizAmount('spending.courses', 'Courses', 'Supermarché, produits du quotidien')}
+    ${wizAmount('spending.resto', 'Resto, fast-food, livraison', 'Uber Eats, McDo, kebab, cafés…')}
+    ${wizAmount('spending.sorties', 'Sorties & loisirs', 'Bars, ciné, soirées…')}
+    ${wizAmount('spending.shopping', 'Shopping', 'Vêtements, achats en ligne…')}
+    ${wizAmount('spending.autre', 'Autre', 'Tabac, jeux, divers…')}
+    ${wizTotal('spending', 'Total du quotidien')}`,
+
+  () => {
+    const income = sumGroup('incomes');
+    const free = income - sumGroup('charges');
+    wiz.answers.savings ??= suggestSavings(wiz.answers);
+    return `<h2>Mettre un peu de côté</h2>
+    <p class="lead">Après vos charges fixes, il vous reste <strong>${money(free)}</strong> par mois.
+      Le bon réflexe : mettre de côté <strong>dès la paie</strong>, pas « ce qui reste à la fin » (il ne reste jamais rien).</p>
+    ${free > 0 ? `<div class="alert good small">Conseil pour vous : <strong>${money(suggestSavings(wiz.answers))} par mois</strong>. Même 20 € suffisent pour commencer.</div>` : '<div class="alert warn small">Vos charges dépassent vos revenus : on commence sans épargne, il faut d’abord rééquilibrer.</div>'}
+    <label class="wiz-row"><span>🐷 Montant à mettre de côté</span>
+      <input data-path="savings" inputmode="decimal" placeholder="0" autocomplete="off" value="${wiz.answers.savings ? String(wiz.answers.savings).replace('.', ',') : ''}"><b>€</b></label>`;
+  },
+
+  () => {
+    const plan = buildPlan(wiz.answers);
+    const r = plan.summary;
+    const name = wiz.answers.name ? `, ${esc(wiz.answers.name)}` : '';
+    const diag = [];
+    if (r.available <= 0) {
+      diag.push(`<div class="alert bad"><strong>Le problème principal : vos charges</strong>Charges fixes + épargne dépassent vos revenus de ${money(-r.available)} par mois. Avant tout : réduire une charge (forfait, abonnements, crédit) ou augmenter les revenus (APL, prime d’activité, heures en plus).</div>`);
+    } else if (r.dryDay) {
+      diag.push(`<div class="alert warn"><strong>Voilà pourquoi vous êtes à sec vers le ${r.dryDay}</strong>Vos dépenses du quotidien (≈ ${money(r.estimated)}) dépassent ce qui reste après les charges (${money(r.available)}) : il manque <strong>${money(r.overspend)} par mois</strong>.${r.biggestSpending ? ` Le plus gros poste : <strong>${esc(cat(r.biggestSpending).label.toLowerCase())}</strong>.` : ''} Les enveloppes ci-dessous sont calculées pour tenir tout le mois.</div>`);
+    } else if (r.estimated > 0) {
+      diag.push(`<div class="alert good"><strong>Vos habitudes tiennent dans votre budget 👍</strong>Il reste environ ${money(r.available - r.estimated)} de marge par mois. Le secret maintenant : noter vos dépenses pour vérifier.</div>`);
+    }
+    if (r.chargePct > 50) diag.push(`<div class="alert warn small">Vos charges fixes représentent <strong>${r.chargePct} %</strong> de vos revenus (repère : 50 % maximum).</div>`);
+    const subs = (Number(wiz.answers.charges?.streaming) || 0) + (Number(wiz.answers.charges?.sport) || 0);
+    if (subs >= 20) diag.push(`<div class="alert warn small">Abonnements : ${money(subs)} par mois, soit <strong>${money(subs * 12)} par an</strong>. Lesquels utilisez-vous vraiment ?</div>`);
+
+    return `<h2>Votre budget${name} 🎯</h2>
+    ${r.available > 0 ? `<section class="card hero"><div class="label">Pour tenir tout le mois, dépensez au maximum</div><div class="big">${money(r.perDay)}</div><div class="sub">par jour (hors loyer et abonnements, déjà comptés)</div></section>` : ''}
+    <section class="card"><div class="flow">
+      <div class="flow-row"><span>Revenus</span><span class="pos">${money(r.income, true)}</span></div>
+      <div class="flow-row"><span>Charges fixes</span><span>${money(-r.charges)}</span></div>
+      <div class="flow-row"><span>Épargne</span><span>${money(-r.savings)}</span></div>
+      <div class="flow-row total"><span>Reste pour le quotidien</span><span class="${r.available < 0 ? 'neg' : ''}">${money(r.available)}</span></div>
+    </div></section>
+    ${diag.join('')}
+    ${plan.budgets.length ? `<section class="card"><h2>Vos enveloppes du mois</h2><ul class="list">${plan.budgets
+      .map((b) => `<li><div class="emoji">${cat(b.category).emoji}</div><div class="grow title">${esc(cat(b.category).label)}</div><div class="amount">${money(b.amount)}</div></li>`)
+      .join('')}</ul><p class="muted small">Une partie est gardée en marge pour les imprévus. Tout reste modifiable dans l’onglet Budget.</p></section>` : ''}`;
+  },
+];
+
+function openWizard() {
+  const prev = state.settings.answers;
+  wiz = {
+    step: 0,
+    answers: prev ? structuredClone(prev) : { name: state.settings.name || '', incomes: {}, charges: {}, spending: {} },
+  };
+  document.body.classList.add('wizard-open');
+  renderWizard();
+}
+
+function closeWizard() {
+  wiz = null;
+  document.body.classList.remove('wizard-open');
+  $('#wizard').hidden = true;
+  $('#wizard').innerHTML = '';
+}
+
+function renderWizard() {
+  const last = WIZ_STEPS.length - 1;
+  const el = $('#wizard');
+  el.hidden = false;
+  el.innerHTML = `<div class="wiz">
+    <div class="wiz-top"><span class="muted small">${wiz.step < last ? `Question ${wiz.step + 1} sur ${last}` : 'Résultat'}</span>
+      ${wiz.step < last ? '<button class="link-btn" data-action="wiz-skip">Passer</button>' : ''}</div>
+    <div class="wiz-progress"><i style="width:${(wiz.step / last) * 100}%"></i></div>
+    ${WIZ_STEPS[wiz.step]()}
+  </div>
+  <div class="wiz-foot"><div class="btn-row">
+    ${wiz.step > 0 ? `<button class="btn ghost" data-action="wiz-prev">${wiz.step === last ? 'Modifier' : 'Retour'}</button>` : ''}
+    ${wiz.step < last
+      ? `<button class="btn" data-action="wiz-next">${wiz.step === last - 1 ? 'Voir mon budget' : 'Continuer'}</button>`
+      : '<button class="btn" data-action="wiz-apply">Créer mon budget</button>'}
+  </div></div>`;
+  el.scrollTop = 0;
+}
+
+// Enregistre les champs de l'écran courant dans wiz.answers.
+function readWizard() {
+  for (const input of document.querySelectorAll('#wizard [data-path]')) {
+    const path = input.dataset.path;
+    if (input.type === 'radio') {
+      if (input.checked) setPath(wiz.answers, path, input.value);
+    } else if (path === 'name') {
+      wiz.answers.name = input.value.trim();
+    } else if (path === 'payDay') {
+      const d = parseInt(input.value, 10);
+      wiz.answers.payDay = d >= 1 && d <= 31 ? d : null;
+    } else {
+      const v = parseAmount(input.value);
+      setPath(wiz.answers, path, v > 0 ? v : 0);
+    }
+  }
+}
+
+function wizardGo(delta) {
+  readWizard();
+  if (delta > 0 && wiz.step === 1 && sumGroup('incomes') <= 0) return toast('Indiquez au moins un revenu');
+  wiz.step = Math.max(0, Math.min(WIZ_STEPS.length - 1, wiz.step + delta));
+  renderWizard();
+}
+
+function applyPlan() {
+  const plan = buildPlan(wiz.answers);
+  const now = Date.now();
+  // Le bilan remplace le budget prévu (revenus, charges, épargne, enveloppes) ; les dépenses notées restent.
+  for (const col of ['incomes', 'charges', 'savingsPlans', 'budgets']) {
+    for (const it of state[col]) state.deleted[it.id] = now;
+    state[col] = plan[col].map((it) => ({ ...it, id: uid(), from: ui.month, updatedAt: now }));
+  }
+  if (!state.goals.some((g) => g.name === 'Fonds d’urgence') && plan.summary.charges > 0) {
+    state.goals.push({ id: uid(), name: 'Fonds d’urgence', target: Math.max(300, Math.round(plan.summary.charges)), saved: 0, updatedAt: now });
+  }
+  state.settings = { ...state.settings, name: wiz.answers.name || state.settings.name, onboarded: true, answers: wiz.answers, updatedAt: now };
+  closeWizard();
+  ui.tab = 'home';
+  commit();
+  toast('Votre budget est prêt ✨');
+}
+
+// Total en direct sur les écrans de montants.
+document.addEventListener('input', (e) => {
+  const group = e.target.dataset?.group;
+  const out = document.getElementById('wiz-total');
+  if (!wiz || !group || !out || out.dataset.group !== group) return;
+  let sum = 0;
+  for (const input of document.querySelectorAll(`#wizard [data-group="${group}"]`)) {
+    if (input !== out) sum += parseAmount(input.value) || 0;
+  }
+  // Les montants du même groupe saisis sur un autre écran (charges : logement + abonnements).
+  const here = new Set([...document.querySelectorAll(`#wizard input[data-group="${group}"]`)].map((i) => i.dataset.path.split('.')[1]));
+  for (const [k, v] of Object.entries(wiz.answers[group] || {})) if (!here.has(k)) sum += Number(v) || 0;
+  out.textContent = money(sum);
+});
+
 // ---------- Compte & synchro ----------
 
 const account = { user: null };
@@ -735,6 +979,7 @@ async function connectBudget() {
       onRemote: (merged) => {
         state = merged;
         persist();
+        if (wiz && state.settings.onboarded) closeWizard();
         safeRender();
       },
       onStatus: (status, message) => setSyncStatus(status, status === 'error' ? cloud.errorMessage({ message }) : ''),
@@ -761,6 +1006,8 @@ async function onSignedIn(user) {
 // ---------- Démarrage ----------
 
 render();
+// Premier lancement : le questionnaire construit le budget.
+if (!state.settings.onboarded && !state.incomes.length && !state.charges.length) openWizard();
 if (cloud.cloudEnabled) {
   cloud.onUser((user) => {
     if (user) onSignedIn(user);

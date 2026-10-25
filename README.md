@@ -21,6 +21,9 @@ Et elle prévient : *« À ce rythme, vous serez à sec vers le 18 »*.
 
 ## Fonctionnalités
 
+- **Bilan de départ** : au premier lancement, quelques questions (revenus, logement, abonnements, dépenses
+  habituelles, épargne). L'appli construit le budget toute seule et explique **pourquoi** on est à sec
+  (ex. « il manque 115 € par mois, le plus gros poste : les courses »). Refaisable depuis *Réglages*.
 - **Accueil** : reste du mois, budget par jour, alerte si le rythme est trop élevé, prélèvements à venir.
 - **Dépenses** : ajout en 3 secondes avec le bouton `+`, par catégorie.
 - **Budget** : revenus, charges fixes, enveloppes (courses, sorties…), avec des repères (charges ≤ 50 %, épargne ≈ 10 %).
@@ -81,6 +84,7 @@ Pour tester les comptes sans toucher à la prod, lancer l'émulateur Firebase
 | `index.html`, `styles.css` | Interface (mobile d'abord, mode sombre auto) |
 | `app.js` | Écrans, formulaires, stockage local, compte |
 | `calc.js` | Calculs purs (reste à vivre, budget/jour, projection, fusion) |
+| `plan.js` | Bilan de départ : réponses → budget, enveloppes, épargne conseillée, diagnostic |
 | `sync.js` | Synchro du budget entre appareils (fusion sans conflit, hors ligne) |
 | `cloud.js` | Comptes Firebase (Auth) et données (Firestore) |
 | `firebase-config.js` | Configuration Firebase de l'application (`null` = mode local) |
