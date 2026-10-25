@@ -207,3 +207,6 @@ pre.code {
 code { font-size: .85em; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
 .field textarea { font-family: ui-monospace, monospace; font-size: .8rem; resize: vertical; }
 a { color: var(--accent); }
+.busy { cursor: progress; }
+.busy main button, .busy main .btn { opacity: .6; pointer-events: none; }
+.view-switch[hidden] { display: none; }

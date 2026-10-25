@@ -1,6 +1,6 @@
 // Cache de l'application pour qu'elle s'ouvre même sans réseau.
-const CACHE = 'budget-duo-v2';
-const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'calc.js', 'sync.js', 'manifest.webmanifest', 'icon.svg'];
+const CACHE = 'budget-duo-v3';
+const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'calc.js', 'sync.js', 'cloud.js', 'firebase-config.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));

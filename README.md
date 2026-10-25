@@ -1,7 +1,7 @@
 # Budget Duo 💸
 
-Une petite application (web, installable sur le téléphone) pour suivre **à deux** nos revenus,
-charges fixes, dépenses et épargne — et surtout **arrêter d'être à sec le 20 du mois**.
+Une application web (installable sur téléphone) pour **arrêter d'être à sec avant la fin du mois** :
+suivre ses revenus, ses charges fixes, ses dépenses et son épargne, **seul·e ou à deux**.
 
 ## L'idée
 
@@ -9,11 +9,11 @@ Le solde du compte bancaire trompe : il ne montre pas le loyer qui tombe dans 10
 L'appli calcule plutôt :
 
 ```
-Revenus du mois (alternance, job, CAF…)
+Revenus du mois (salaire, alternance, job, CAF…)
 − Charges fixes (loyer, téléphone, abonnements…)
 − Épargne (mise de côté dès la paie)
 = Reste à vivre
-− Ce qu'on a déjà dépensé
+− Ce qui est déjà dépensé
 = Ce qu'il reste  →  ÷ jours restants  =  combien on peut dépenser PAR JOUR
 ```
 
@@ -22,53 +22,76 @@ Et elle prévient : *« À ce rythme, vous serez à sec vers le 18 »*.
 ## Fonctionnalités
 
 - **Accueil** : reste du mois, budget par jour, alerte si le rythme est trop élevé, prélèvements à venir.
-- **Vue « Nous deux » / toi / elle** : les dépenses communes sont partagées (50/50 ou au prorata, réglable).
-- **Dépenses** : ajout en 3 secondes avec le bouton `+`, par catégorie et par personne.
-- **Budget** : revenus mensuels, charges fixes, enveloppes (courses, sorties…) avec repères (charges ≤ 50 %, épargne ≈ 10 %).
-- **Épargne** : virements automatiques prévus + objectifs (fonds d'urgence, vacances…).
-- **Synchronisation** entre les deux téléphones par fichier (WhatsApp, mail…) avec fusion intelligente.
-- Fonctionne **hors ligne**, aucune donnée envoyée sur internet, aucun compte à créer.
+- **Dépenses** : ajout en 3 secondes avec le bouton `+`, par catégorie.
+- **Budget** : revenus, charges fixes, enveloppes (courses, sorties…), avec des repères (charges ≤ 50 %, épargne ≈ 10 %).
+- **Épargne** : virements automatiques prévus et objectifs (fonds d'urgence, vacances…).
+- **Solo par défaut, à deux en option** : on ajoute un·e partenaire, les dépenses communes sont partagées (50/50 ou au prorata), avec une vue par personne.
+- **Comptes** (e-mail ou Google) : sauvegarde dans le cloud, synchro en temps réel entre appareils, **invitation du/de la partenaire par lien**.
+- Marche **sans compte** (données sur le téléphone) et **hors ligne**.
+- **Suppression de compte** et des données en un clic (RGPD).
 
-## L'utiliser
+## Mise en production
 
-### Le plus simple : GitHub Pages (gratuit)
-1. Sur GitHub : *Settings → Pages → Build and deployment* : *Deploy from a branch*, choisir la branche, dossier `/ (root)`, *Save*.
-2. Attendre 1–2 min et ouvrir l'adresse donnée (ici `https://adonald523.github.io/ADonald523/`) sur le téléphone.
-3. **Ajouter à l'écran d'accueil** (Safari : bouton Partager → « Sur l'écran d'accueil » ; Chrome : menu ⋮ → « Installer l'application »).
+L'appli fonctionne tout de suite en mode local. Pour activer les comptes, il faut **un projet Firebase
+pour l'application**, créé une seule fois par l'éditeur (pas par les utilisateurs). Plan gratuit
+*Spark*, sans carte bancaire, largement suffisant pour démarrer.
 
-### En local
+1. **Héberger le site** : GitHub → *Settings → Pages → Deploy from a branch* → la branche, dossier `/ (root)` → *Save*.
+   Adresse : `https://adonald523.github.io/ADonald523/`.
+2. **Créer le projet** sur [console.firebase.google.com](https://console.firebase.google.com) (Google Analytics inutile).
+3. **Authentication** → *Commencer* → activer **E-mail/Mot de passe** et **Google**.
+   Puis *Paramètres → Domaines autorisés* → ajouter `adonald523.github.io`.
+4. **Firestore Database** → *Créer une base de données* → emplacement en Europe (ex. `eur3`), *mode production*.
+5. Onglet **Règles** → coller le contenu de [`firestore.rules`](firestore.rules) → *Publier*.
+6. ⚙️ **Paramètres du projet** → *Vos applications* → icône `</>` (Web) → *Enregistrer*,
+   puis copier les valeurs de `firebaseConfig` dans [`firebase-config.js`](firebase-config.js) :
+   ```js
+   export const FIREBASE_CONFIG = {
+     apiKey: '…',
+     authDomain: '….firebaseapp.com',
+     projectId: '…',
+     appId: '…',
+   };
+   ```
+   (Ces valeurs ne sont pas secrètes : la sécurité repose sur les règles Firestore.)
+7. Commit + push : les utilisateurs voient la carte **Compte** dans *Réglages*.
+
+### Sécurité des données
+- Un utilisateur ne peut lire et modifier **que son budget** (`users/{uid}` → `budgets/{id}`, accès réservé aux `members`).
+- On ne rejoint un budget qu'avec le **jeton secret** du lien d'invitation, et **2 personnes maximum** par budget.
+- Personne ne peut lister les budgets des autres.
+
+Les règles sont testées avec l'émulateur Firebase : lecture, listing et tentatives d'intrusion
+(mauvais jeton, budget déjà complet) sont refusés.
+
+## Développement
+
 ```bash
-npm start      # puis ouvrir http://localhost:8080
-npm test       # tests des calculs
+npm start      # serveur local : http://localhost:8080
+npm test       # tests des calculs et de la synchro
 ```
-(Il faut passer par un petit serveur : ouvrir `index.html` directement ne marche pas à cause des modules JS.)
+Ouvrir `index.html` directement ne marche pas (modules JS) : passer par `npm start`.
 
-## Synchroniser à deux (automatique)
-Les deux téléphones voient les mêmes chiffres en temps réel, grâce à une base **Firebase** gratuite
-(plan Spark, sans carte bancaire). À faire **une seule fois**, par l'un des deux :
-
-1. [console.firebase.google.com](https://console.firebase.google.com) → *Créer un projet* (Google Analytics inutile).
-2. *Créer → Firestore Database → Créer une base de données* → emplacement en Europe, *mode production*.
-3. Onglet *Règles* : coller le contenu de [`firestore.rules`](firestore.rules) → *Publier*.
-4. ⚙️ *Paramètres du projet* → *Vos applications* → icône `</>` (Web) → *Enregistrer* → copier le bloc `firebaseConfig`.
-5. Dans l'appli : *Réglages → Synchro automatique* → coller le bloc → **Activer**.
-6. **Inviter** → envoyer le lien à l'autre en message privé. Il/elle l'ouvre sur son téléphone : c'est tout.
-
-Ce qui était déjà noté sur chaque téléphone est fusionné, sans doublons. Hors ligne, l'appli continue
-de marcher et se resynchronise au retour du réseau.
-
-> 🔒 Tout le budget est stocké dans un document dont le nom est un code secret aléatoire (24 caractères)
-> contenu dans le lien d'invitation : ne partagez ce lien qu'entre vous deux.
-
-Sans Firebase, il reste la **sauvegarde manuelle** (Réglages → envoyer / importer un fichier).
+Pour tester les comptes sans toucher à la prod, lancer l'émulateur Firebase
+(`npx firebase-tools emulators:start --project demo-budget`) et ajouter à `FIREBASE_CONFIG` :
+`emulators: { auth: 'http://127.0.0.1:9099', firestore: ['127.0.0.1', 8081] }`.
 
 ## Structure
+
 | Fichier | Rôle |
 |---|---|
 | `index.html`, `styles.css` | Interface (mobile d'abord, mode sombre auto) |
-| `app.js` | Écrans, formulaires, stockage local, import/export |
+| `app.js` | Écrans, formulaires, stockage local, compte, invitations |
 | `calc.js` | Calculs purs (reste à vivre, budget/jour, projection, fusion) |
-| `sync.js` | Synchro automatique Firebase (chargée seulement si activée) |
-| `firestore.rules` | Règles de sécurité à coller dans Firebase |
+| `sync.js` | Synchro d'un budget entre appareils (fusion sans conflit, hors ligne) |
+| `cloud.js` | Comptes Firebase (Auth) et budgets (Firestore) |
+| `firebase-config.js` | Configuration Firebase de l'application (`null` = mode local) |
+| `firestore.rules`, `firebase.json` | Règles de sécurité et configuration de l'émulateur |
 | `sw.js`, `manifest.webmanifest`, `icon.svg` | Installation sur téléphone + hors ligne |
 | `tests/` | Tests (`node --test`) |
+
+## Limites connues / suite
+- Un budget = un document Firestore (1 Mo max, soit plusieurs milliers de dépenses : des années d'usage).
+  Pour une grosse base d'utilisateurs, passer à un document par dépense.
+- Pas encore de connexion bancaire automatique (agrégateurs DSP2 type Powens ou Bridge : payants, avec contrat).
+- Pour les stores (App Store / Play Store) : empaqueter la PWA avec Capacitor.

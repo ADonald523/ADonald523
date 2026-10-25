@@ -1,28 +1,6 @@
-// Synchronisation automatique entre les deux téléphones.
-// Toute la sauvegarde du couple vit dans un seul document Firestore,
-// identifié par un code secret partagé via le lien d'invitation.
+// Synchronisation d'un budget entre appareils (et entre partenaires).
+// `adapter` donne accès au document distant : subscribe(onData, onError) et transact(update).
 import { mergeStates, fingerprint } from './calc.js';
-
-const SDK = 'https://www.gstatic.com/firebasejs/10.14.1';
-
-// Adaptateur Firestore : subscribe() écoute le document, transact() le met à jour atomiquement.
-export async function firestoreAdapter(config, code) {
-  const [{ initializeApp, getApps }, fs] = await Promise.all([
-    import(`${SDK}/firebase-app.js`),
-    import(`${SDK}/firebase-firestore.js`),
-  ]);
-  const app = getApps()[0] || initializeApp(config);
-  const db = fs.getFirestore(app);
-  const ref = fs.doc(db, 'couples', code);
-  const parse = (snap) => (snap.exists() ? JSON.parse(snap.data().json) : null);
-  return {
-    subscribe: (onData, onError) => fs.onSnapshot(ref, (snap) => onData(parse(snap)), onError),
-    transact: (update) => fs.runTransaction(db, async (tx) => {
-      const next = update(parse(await tx.get(ref)));
-      tx.set(ref, { json: JSON.stringify(next), updatedAt: fs.serverTimestamp() });
-    }),
-  };
-}
 
 // getState() : état local ; onRemote(state) : appliquer un état fusionné ;
 // onStatus('ok' | 'syncing' | 'offline' | 'error', message?)
@@ -78,28 +56,8 @@ export function createSync(adapter, { getState, onRemote, onStatus }) {
   };
 }
 
-// Code couple : 24 caractères aléatoires, impossible à deviner.
-export function newCoupleCode() {
+// Jeton aléatoire (invitations) : 24 caractères, impossible à deviner.
+export function randomToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(18));
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_');
-}
-
-// Accepte le bloc copié depuis la console Firebase (`const firebaseConfig = { apiKey: "…", … }`).
-export function parseFirebaseConfig(text) {
-  const config = {};
-  for (const [, key, value] of String(text).matchAll(/["']?(\w+)["']?\s*:\s*["']([^"']*)["']/g)) config[key] = value;
-  return config.apiKey && config.projectId && config.appId ? config : null;
-}
-
-export const encodeInvite = (sync) =>
-  btoa(unescape(encodeURIComponent(JSON.stringify(sync)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-export function decodeInvite(s) {
-  try {
-    const json = decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/'))));
-    const sync = JSON.parse(json);
-    return sync?.code && sync?.config?.projectId ? sync : null;
-  } catch {
-    return null;
-  }
 }

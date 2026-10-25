@@ -1,5 +1,6 @@
 import { computeMonth, mergeStates, monthKey, shiftMonth, shareOf, activeIn, pad, COLLECTIONS } from './calc.js';
-import { firestoreAdapter, createSync, newCoupleCode, parseFirebaseConfig, encodeInvite, decodeInvite } from './sync.js';
+import { createSync } from './sync.js';
+import * as cloud from './cloud.js';
 
 // ---------- Données de référence ----------
 
@@ -41,11 +42,11 @@ const cat = (id) => ALL_CATS[id] || { label: id || '—', emoji: '💸' };
 
 const DATA_KEY = 'budget-duo:data';
 const UI_KEY = 'budget-duo:ui';
-const SYNC_KEY = 'budget-duo:sync';
+const JOIN_KEY = 'budget-duo:join';
 
 const emptyState = () => ({
   version: 1,
-  settings: { p1: 'Moi', p2: 'Ma copine', splitP1: 50, updatedAt: 0 },
+  settings: { p1: 'Moi', p2: '', splitP1: 50, updatedAt: 0 },
   incomes: [], charges: [], savingsPlans: [], budgets: [], goals: [], transactions: [],
   deleted: {},
 });
@@ -115,6 +116,10 @@ const today = () => new Date();
 const isoDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const ownerName = (o) => (o === 'shared' ? 'Commun' : state.settings[o] || o);
 const viewName = (v) => (v === 'all' ? 'Nous deux' : state.settings[v]);
+// Budget solo par défaut ; le partenaire est optionnel.
+const hasPartner = () => Boolean(state.settings.p2);
+// « · Prénom » sous un élément, seulement quand le budget est à deux.
+const who = (o) => (hasPartner() ? ` · ${esc(ownerName(o))}` : '');
 const inView = (item) => shareOf(item.owner, ui.view, state.settings.splitP1) > 0;
 
 function pct(part, whole) {
@@ -142,9 +147,13 @@ function render() {
   const [y, m] = ui.month.split('-').map(Number);
   $('#month-label').textContent = new Date(y, m - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 
-  $('#view-switch').innerHTML = ['all', 'p1', 'p2']
-    .map((v) => `<button role="tab" data-action="view" data-id="${v}" aria-selected="${ui.view === v}">${esc(viewName(v))}</button>`)
-    .join('');
+  if (!hasPartner()) ui.view = 'all';
+  $('#view-switch').hidden = !hasPartner();
+  $('#view-switch').innerHTML = hasPartner()
+    ? ['all', 'p1', 'p2']
+      .map((v) => `<button role="tab" data-action="view" data-id="${v}" aria-selected="${ui.view === v}">${esc(viewName(v))}</button>`)
+      .join('')
+    : '';
 
   for (const b of document.querySelectorAll('#tabbar button')) b.classList.toggle('active', b.dataset.tab === ui.tab);
 
@@ -167,6 +176,10 @@ function renderHome() {
     out.push(`<section class="card"><h2>Pour bien démarrer</h2><ol class="steps">${steps
       .map(([ok, text, action]) => `<li class="${ok ? 'done' : ''}">${ok ? text : `<button class="link-btn" data-action="${action}">${text}</button>`}</li>`)
       .join('')}</ol></section>`);
+  }
+
+  if (cloud.cloudEnabled && !account.user && state.transactions.length >= 3) {
+    out.push(`<div class="alert warn small"><strong>💾 Vos données ne sont que sur ce téléphone</strong>Créez un compte gratuit pour ne rien perdre et les retrouver partout. <button class="link-btn" data-action="tab" data-id="settings">Créer un compte</button></div>`);
   }
 
   let heroLabel = 'Il vous reste pour le quotidien';
@@ -213,7 +226,7 @@ function renderHome() {
   if (upcoming.length && !r.isPast) {
     out.push(`<section class="card"><h2>Prélèvements à venir <small>${money(upcoming.reduce((s, c) => s + shareAmount(c), 0))}</small></h2><ul class="list">${upcoming
       .slice(0, 6)
-      .map((c) => `<li><div class="emoji">${cat(c.category).emoji}</div><div class="grow"><div class="title">${esc(c.label)}</div><div class="muted small">le ${c.day || 1} · ${esc(ownerName(c.owner))}</div></div><div class="amount">${money(shareAmount(c))}</div></li>`)
+      .map((c) => `<li><div class="emoji">${cat(c.category).emoji}</div><div class="grow"><div class="title">${esc(c.label)}</div><div class="muted small">le ${c.day || 1}${who(c.owner)}</div></div><div class="amount">${money(shareAmount(c))}</div></li>`)
       .join('')}</ul></section>`);
   }
 
@@ -244,7 +257,7 @@ function txRow(t) {
   const isIncome = t.type === 'income';
   return `<li><button class="row" data-action="edit-tx" data-id="${t.id}">
     <div class="emoji">${c.emoji}</div>
-    <div class="grow"><div class="title">${esc(t.note || c.label)}</div><div class="muted small">${esc(c.label)} · ${esc(ownerName(t.owner))}</div></div>
+    <div class="grow"><div class="title">${esc(t.note || c.label)}</div><div class="muted small">${esc(c.label)}${who(t.owner)}</div></div>
     <div class="amount ${isIncome ? 'pos' : ''}">${money(isIncome ? shareAmount(t) : -shareAmount(t))}</div>
   </button></li>`;
 }
@@ -276,7 +289,7 @@ function recurringList(col, items, emptyText) {
   return `<ul class="list">${items
     .map((it) => `<li><button class="row" data-action="edit-${col}" data-id="${it.id}">
       <div class="emoji">${cat(it.category).emoji}</div>
-      <div class="grow"><div class="title">${esc(it.label || cat(it.category).label)}</div><div class="muted small">${esc(ownerName(it.owner))}${it.day ? ` · le ${it.day}` : ''}</div></div>
+      <div class="grow"><div class="title">${esc(it.label || cat(it.category).label)}</div><div class="muted small">${[hasPartner() && esc(ownerName(it.owner)), it.day && `le ${it.day}`].filter(Boolean).join(' · ') || '&nbsp;'}</div></div>
       <div class="amount">${money(shareAmount(it))}</div>
     </button></li>`)
     .join('')}</ul>`;
@@ -318,7 +331,7 @@ function renderPlan() {
       .map((b) => {
         const spent = r.byCategory[b.category]?.spent || 0;
         const total = r.byCategory[b.category]?.budget || shareAmount(b);
-        return `<li><button class="row" data-action="edit-budgets" data-id="${b.id}"><div class="emoji">${cat(b.category).emoji}</div><div class="grow"><div class="flow-row"><span class="title">${esc(cat(b.category).label)}</span><span class="small muted">${money(shareAmount(b))} · ${esc(ownerName(b.owner))}</span></div>${bar(spent, total)}</div></button></li>`;
+        return `<li><button class="row" data-action="edit-budgets" data-id="${b.id}"><div class="emoji">${cat(b.category).emoji}</div><div class="grow"><div class="flow-row"><span class="title">${esc(cat(b.category).label)}</span><span class="small muted">${money(shareAmount(b))}${who(b.owner)}</span></div>${bar(spent, total)}</div></button></li>`;
       })
       .join('')}</ul>` : ''}
     <div class="flow-row small" style="margin-top:8px"><span class="muted">Non réparti</span><span class="${free < 0 ? 'neg' : ''}">${money(free)}</span></div>
@@ -343,7 +356,7 @@ function renderSavings() {
       .map((g) => `<li><div class="emoji">🎯</div><div class="grow">
         <div class="flow-row"><button class="link-btn" style="padding:0;color:inherit;font-weight:600" data-action="edit-goal" data-id="${g.id}">${esc(g.name)}</button><span class="small muted">${money(g.saved || 0)} / ${money(g.target)}</span></div>
         ${bar(g.saved || 0, g.target)}
-        <div class="flow-row small muted" style="margin-top:4px"><span>${esc(ownerName(g.owner))} · ${pct(g.saved || 0, g.target)} %</span><button class="link-btn" data-action="feed-goal" data-id="${g.id}">+ / − argent</button></div>
+        <div class="flow-row small muted" style="margin-top:4px"><span>${pct(g.saved || 0, g.target)} %${who(g.owner)}</span><button class="link-btn" data-action="feed-goal" data-id="${g.id}">+ / − argent</button></div>
       </div></li>`)
       .join('')}</ul>` : '<p class="muted small">Un objectif motive : vacances, permis, fonds d’urgence…</p>'}
     <button class="link-btn" data-action="add-goal">+ Nouvel objectif</button></section>
@@ -357,23 +370,22 @@ function renderSavings() {
 function renderSettings() {
   const s = state.settings;
   return `
-  <section class="card"><h2>Vous deux</h2>
+  <section class="card"><h2>Profil</h2>
     <form id="settings-form">
-      <div class="grid2">
-        <label class="field"><span>Prénom 1</span><input name="p1" value="${esc(s.p1)}" maxlength="20"></label>
-        <label class="field"><span>Prénom 2</span><input name="p2" value="${esc(s.p2)}" maxlength="20"></label>
-      </div>
-      <label class="field"><span>Partage des dépenses communes : <strong id="split-out">${s.splitP1} % / ${100 - s.splitP1} %</strong></span>
+      <label class="field"><span>${hasPartner() ? 'Prénom 1' : 'Votre prénom'}</span><input name="p1" value="${esc(s.p1)}" maxlength="20"></label>
+      <label class="field"><span>Budget à deux ? Prénom du/de la partenaire <em>(optionnel)</em></span>
+        <input name="p2" value="${esc(s.p2)}" maxlength="20" placeholder="Laisser vide pour un budget solo"></label>
+      ${hasPartner() ? `<label class="field"><span>Partage des dépenses communes : <strong id="split-out">${s.splitP1} % / ${100 - s.splitP1} %</strong></span>
         <input name="splitP1" type="range" min="0" max="100" step="5" value="${s.splitP1}"></label>
-      <p class="muted small">Astuce : partager au prorata des revenus est souvent plus juste que 50/50.${splitHint()}</p>
+      <p class="muted small">Astuce : partager au prorata des revenus est souvent plus juste que 50/50.${splitHint()}</p>` : ''}
       <button class="btn" type="submit">Enregistrer</button>
     </form>
   </section>
 
-  ${renderSyncCard()}
+  ${renderAccountCard()}
 
   <section class="card"><details><summary><strong>Sauvegarde manuelle (fichier)</strong></summary>
-    <p class="small">Sans synchro automatique, vous pouvez aussi vous échanger un fichier :</p>
+    <p class="small">Exporter vos données dans un fichier (sauvegarde, ou échange avec un autre téléphone sans compte) :</p>
     <ol class="steps small">
       <li>L’un appuie sur <strong>Envoyer mes données</strong> (WhatsApp, mail…)</li>
       <li>L’autre ouvre le fichier avec <strong>Importer et fusionner</strong></li>
@@ -391,24 +403,14 @@ function renderSettings() {
     <div class="tip small"><strong>5. Vérifier vos aides.</strong> APL, prime d’activité (dès 18 ans en alternance si vous gagnez assez) : simulez sur caf.fr.</div>
   </section>
 
-  <section class="card"><h2>Données</h2>
-    <button class="btn danger" data-action="reset">Tout effacer sur ce téléphone</button></section>`;
+  ${account.user ? '' : `<section class="card"><h2>Données</h2>
+    <button class="btn danger" data-action="reset">Tout effacer sur ce téléphone</button></section>`}`;
 }
-
-const FIRESTORE_RULES = `rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /couples/{code} {
-      allow get, create, update: if code.size() >= 20
-        && (request.resource == null || request.resource.data.json.size() < 1000000);
-    }
-  }
-}`;
 
 const SYNC_LABELS = {
   connecting: '⏳ Connexion…',
   syncing: '🔄 Synchronisation…',
-  ok: '🟢 Synchronisé',
+  ok: '🟢 Sauvegardé et synchronisé',
   offline: '🟠 Hors ligne — ça se synchronisera au retour du réseau',
   error: '🔴 Erreur de synchro',
 };
@@ -418,44 +420,38 @@ function syncStatusText() {
   return `${SYNC_LABELS[status] || ''}${status === 'error' && message ? `<br><span class="muted">${esc(message)}</span>` : ''}`;
 }
 
-const namesWarning = () =>
-  state.settings.p1 === 'Moi' || state.settings.p2 === 'Ma copine'
-    ? '<div class="alert warn small">Mettez d’abord vos vrais prénoms dans « Vous deux » : « Moi » ne veut plus rien dire une fois sur deux téléphones.</div>'
-    : '';
-
-function renderSyncCard() {
-  if (syncCfg) {
-    const other = state.settings[ui.me === 'p2' ? 'p1' : 'p2'];
-    return `<section class="card"><h2>Synchro automatique</h2>
-      <p class="small" id="sync-status">${syncStatusText()}</p>
-      <p class="small">Chaque dépense ajoutée ici apparaît sur l’autre téléphone en quelques secondes.</p>
-      ${namesWarning()}
-      <div class="field"><span>Sur ce téléphone, je suis</span><div class="chips">${['p1', 'p2']
-        .map((p) => `<label><input type="radio" name="me" value="${p}" ${ui.me === p ? 'checked' : ''}><span>${esc(state.settings[p])}</span></label>`)
-        .join('')}</div></div>
-      <button class="btn" data-action="sync-invite">Inviter ${esc(other)} (envoyer le lien)</button>
-      <p class="muted small">Le lien donne accès à vos données : envoyez-le seulement à ${esc(other)}, en message privé.</p>
-      <button class="link-btn" data-action="sync-disable">Désactiver la synchro sur ce téléphone</button>
+function renderAccountCard() {
+  if (!cloud.cloudEnabled) return '';
+  if (!account.user) {
+    return `<section class="card"><h2>Compte</h2>
+      <p class="small">Créez un compte gratuit pour <strong>sauvegarder</strong> votre budget, le retrouver sur <strong>tous vos appareils</strong> et, si vous voulez, le <strong>partager avec votre partenaire</strong>.</p>
+      ${loadPendingJoin() ? '<div class="alert good small">Connectez-vous ou créez un compte pour rejoindre le budget partagé auquel vous avez été invité·e.</div>' : ''}
+      <button class="btn ghost" data-action="auth-google">Continuer avec Google</button>
+      <p class="muted small" style="text-align:center;margin:10px 0">ou avec un e-mail</p>
+      <form id="auth-form">
+        <label class="field"><span>E-mail</span><input name="email" type="email" autocomplete="email" required></label>
+        <label class="field"><span>Mot de passe (6 caractères min.)</span><input name="password" type="password" minlength="6" autocomplete="current-password" required></label>
+        <div class="btn-row"><button class="btn" value="signin">Se connecter</button><button class="btn ghost" value="signup">Créer un compte</button></div>
+      </form>
+      <button class="link-btn" data-action="auth-reset">Mot de passe oublié ?</button>
     </section>`;
   }
-  return `<section class="card"><h2>Synchro automatique</h2>
-    <p class="small">Pour voir tous les deux les mêmes chiffres, en temps réel. <strong>Si l’autre vous a envoyé un lien d’invitation, ouvrez-le simplement</strong> : rien d’autre à faire.</p>
-    ${namesWarning()}
-    <p class="small">Sinon, l’un de vous deux le met en place <strong>une seule fois</strong> (≈ 10 min, gratuit, sans carte bancaire) :</p>
-    <ol class="steps small">
-      <li>Aller sur <a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a> (compte Google) → <em>Créer un projet</em>, nom « budget-duo », Google Analytics inutile.</li>
-      <li>Menu <em>Créer → Firestore Database → Créer une base de données</em>, emplacement en Europe (ex. <code>eur3</code>), <em>mode production</em>.</li>
-      <li>Onglet <em>Règles</em> : tout remplacer par les règles ci-dessous → <em>Publier</em>.</li>
-      <li>⚙️ <em>Paramètres du projet</em> → en bas « Vos applications » → icône <strong>&lt;/&gt;</strong> (Web) → un nom → <em>Enregistrer</em>. Copier le bloc <code>firebaseConfig</code> affiché.</li>
-      <li>Le coller ci-dessous et appuyer sur <em>Activer</em>, puis envoyer le lien d’invitation à l’autre.</li>
-    </ol>
-    <details><summary class="small"><strong>Règles à coller (étape 3)</strong></summary>
-      <pre class="code">${esc(FIRESTORE_RULES)}</pre>
-      <button class="btn ghost" data-action="copy-rules">Copier les règles</button>
-    </details>
-    <label class="field" style="margin-top:12px"><span>Configuration Firebase (étape 4)</span>
-      <textarea id="firebase-config" rows="5" placeholder="const firebaseConfig = {&#10;  apiKey: &quot;…&quot;,&#10;  …&#10;};"></textarea></label>
-    <button class="btn" data-action="sync-enable">Activer la synchro</button>
+  const shared = account.members.length >= 2;
+  const other = state.settings[ui.me === 'p2' ? 'p1' : 'p2'] || 'votre partenaire';
+  const partner = shared
+    ? `<div class="alert good small"><strong>👫 Budget partagé avec ${esc(other)}</strong>Chaque dépense ajoutée apparaît chez l’autre en quelques secondes.</div>
+      <div class="field"><span>Sur ce compte, je suis</span><div class="chips">${['p1', 'p2']
+        .map((p) => `<label><input type="radio" name="me" value="${p}" ${ui.me === p ? 'checked' : ''}><span>${esc(state.settings[p])}</span></label>`)
+        .join('')}</div></div>
+      <button class="link-btn" data-action="budget-leave">Quitter le budget partagé</button>`
+    : `<h3 style="margin:14px 0 4px;font-size:.95rem">Budget à deux</h3>
+      <p class="small">Invitez votre partenaire : chacun note ses dépenses sur son téléphone, vous voyez tout ensemble.</p>
+      <button class="btn" data-action="budget-invite">Inviter mon/ma partenaire</button>`;
+  return `<section class="card"><h2>Mon compte</h2>
+    <p class="small"><strong>${esc(account.user.email || account.user.displayName || '')}</strong><br><span id="sync-status">${syncStatusText()}</span></p>
+    ${partner}
+    <div class="btn-row"><button class="btn ghost" data-action="auth-signout">Se déconnecter</button></div>
+    <button class="link-btn" style="color:var(--bad)" data-action="auth-delete">Supprimer mon compte</button>
   </section>`;
 }
 
@@ -478,11 +474,14 @@ function ownerOptions() {
     { value: 'shared', label: '👫 Commun' },
   ];
 }
+const ownerField = (label) =>
+  hasPartner() ? { name: 'owner', label, type: 'chips', options: ownerOptions() } : { name: 'owner', type: 'hidden' };
 const catOptions = (list) => list.map((c) => ({ value: c.id, label: `${c.emoji} ${c.label}` }));
 const defaultOwner = () => (ui.view === 'all' ? ui.lastOwner || ui.me || 'p1' : ui.view);
 
 function field(f, v) {
   const val = v ?? '';
+  if (f.type === 'hidden') return `<input type="hidden" name="${f.name}" value="${esc(val)}">`;
   if (f.type === 'chips') {
     return `<div class="field"><span>${f.label}</span><div class="chips">${f.options
       .map((o) => `<label><input type="radio" name="${f.name}" value="${esc(o.value)}" ${String(o.value) === String(val) ? 'checked' : ''} required><span>${esc(o.label)}</span></label>`)
@@ -508,7 +507,7 @@ function openForm({ title, fields, values = {}, onSave, onDelete }) {
     </div>`;
   const dlg = $('#sheet');
   dlg.showModal();
-  const first = dlg.querySelector('.amount-input') || dlg.querySelector('input');
+  const first = dlg.querySelector('.amount-input') || dlg.querySelector('input:not([type=hidden])');
   if (first && !values.id) first.focus();
 }
 
@@ -555,7 +554,7 @@ function txForm(t) {
     fields: [
       { name: 'amount', label: 'Montant (€)', type: 'amount' },
       { name: 'category', label: isIncome ? 'Type' : 'Catégorie', type: 'chips', options: catOptions(isIncome ? INCOME_KINDS : EXPENSE_CATS) },
-      { name: 'owner', label: 'Qui ?', type: 'chips', options: ownerOptions() },
+      ownerField('Qui ?'),
       { name: 'date', label: 'Date', type: 'date' },
       { name: 'note', label: 'Note (optionnel)', type: 'text', placeholder: isIncome ? 'ex. heures sup, remboursement…' : 'ex. Lidl, McDo, cinéma…' },
     ],
@@ -574,7 +573,7 @@ function recurringForm(col, item, { title, cats, labelHint, withDay = true }) {
     { name: 'amount', label: 'Montant par mois (€)', type: 'amount' },
     { name: 'category', label: 'Type', type: 'chips', options: catOptions(cats) },
     { name: 'label', label: 'Nom (optionnel)', type: 'text', placeholder: labelHint },
-    { name: 'owner', label: 'À qui ?', type: 'chips', options: ownerOptions() },
+    ownerField('À qui ?'),
   ];
   if (withDay) fields.push({ name: 'day', label: 'Jour du mois', type: 'day', placeholder: 'ex. 5' });
   openForm({
@@ -595,7 +594,7 @@ const FORMS = {
     fields: [
       { name: 'amount', label: 'Montant par mois (€)', type: 'amount' },
       { name: 'category', label: 'Catégorie', type: 'chips', options: catOptions(EXPENSE_CATS) },
-      { name: 'owner', label: 'Pour qui ?', type: 'chips', options: ownerOptions() },
+      ownerField('Pour qui ?'),
     ],
     values: { category: 'courses', owner: defaultOwner(), ...it },
     onSave: (d) => upsert('budgets', { from: ui.month, ...it, ...d }),
@@ -606,7 +605,7 @@ const FORMS = {
     fields: [
       { name: 'name', label: 'Objectif', type: 'text', placeholder: 'ex. Vacances d’été' },
       { name: 'amount', label: 'Montant visé (€)', type: 'amount' },
-      { name: 'owner', label: 'Pour qui ?', type: 'chips', options: ownerOptions() },
+      ownerField('Pour qui ?'),
     ],
     values: { owner: 'shared', amount: g?.target, ...g },
     onSave: ({ amount, ...d }) => upsert('goals', { saved: 0, ...g, ...d, name: d.name || 'Objectif', target: amount }),
@@ -657,36 +656,87 @@ const ACTIONS = {
   },
   export: exportData,
   reset: () => {
+    if (account.user) return toast('Vous êtes connecté : utilisez « Se déconnecter » ou « Supprimer mon compte »');
     if (confirm('Effacer toutes les données de ce téléphone ? (pensez à exporter avant)')) {
-      stopSync();
       state = emptyState();
       commit();
     }
   },
-  'copy-rules': () => copyText(FIRESTORE_RULES, 'Règles copiées'),
-  'sync-enable': () => {
-    const config = parseFirebaseConfig($('#firebase-config').value);
-    if (!config) return toast('Configuration non reconnue : collez tout le bloc firebaseConfig');
-    ui.me ||= 'p1';
-    saveSync({ config, code: newCoupleCode() });
+  'auth-google': () => withBusy(() => cloud.signInGoogle()),
+  'auth-reset': () => {
+    const email = document.querySelector('#auth-form [name=email]')?.value.trim();
+    if (!email) return toast('Entrez d’abord votre e-mail');
+    withBusy(async () => {
+      await cloud.resetPassword(email);
+      toast('E-mail de réinitialisation envoyé');
+    });
   },
-  'sync-invite': async () => {
-    const url = `${location.origin}${location.pathname}#join=${encodeInvite({ ...syncCfg, from: state.settings[ui.me || 'p1'] })}`;
-    const text = 'Rejoins notre budget 💸 (ouvre ce lien sur ton téléphone) :';
-    if (navigator.share) {
-      try {
-        return await navigator.share({ title: 'Budget Duo', text, url });
-      } catch (err) {
-        if (err.name === 'AbortError') return;
+  'auth-signout': () => {
+    if (!confirm('Se déconnecter ? Les données seront retirées de ce téléphone (elles restent dans votre compte).')) return;
+    disconnect();
+    withBusy(async () => {
+      await cloud.signOut();
+      state = emptyState();
+      commit();
+    });
+  },
+  'auth-delete': () => {
+    if (!confirm('Supprimer définitivement votre compte et vos données en ligne ? Cette action est irréversible.')) return;
+    withBusy(async () => {
+      const { user, profile, members } = account;
+      await cloud.deleteAccount(user.uid, profile.budgetId, members);
+      disconnect();
+      state = emptyState();
+      commit();
+      toast('Compte supprimé');
+    });
+  },
+  'budget-invite': () => {
+    const me = ui.me || 'p1';
+    const other = me === 'p1' ? 'p2' : 'p1';
+    if (!state.settings[other] || state.settings[me] === 'Moi') {
+      // Il faut vos deux prénoms : « Moi » n'a plus de sens sur le téléphone de l'autre.
+      return openForm({
+        title: 'Budget à deux',
+        fields: [
+          { name: 'mine', label: 'Votre prénom', type: 'text' },
+          { name: 'theirs', label: 'Prénom de la personne invitée', type: 'text' },
+        ],
+        values: { mine: state.settings[me] === 'Moi' ? '' : state.settings[me], theirs: state.settings[other] },
+        onSave: ({ mine, theirs }) => {
+          if (!mine || !theirs) return toast('Entrez les deux prénoms');
+          state.settings = { ...state.settings, [me]: mine, [other]: theirs, updatedAt: Date.now() };
+          commit();
+          ACTIONS['budget-invite']();
+        },
+      });
+    }
+    withBusy(async () => {
+      const invite = await cloud.createInvite(account.profile.budgetId);
+      const url = `${location.origin}${location.pathname}#join=${invite}`;
+      const text = `${state.settings[ui.me || 'p1']} t’invite à partager son budget sur Budget Duo 💸`;
+      if (navigator.share) {
+        try {
+          return await navigator.share({ title: 'Budget Duo', text, url });
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+        }
       }
-    }
-    copyText(url, 'Lien copié : envoie-le par message');
+      copyText(url, 'Lien copié : envoyez-le par message');
+    });
   },
-  'sync-disable': () => {
-    if (confirm('Arrêter la synchro sur ce téléphone ? Les données restent ici, et l’autre garde les siennes.')) {
+  'budget-leave': () => {
+    if (!confirm('Quitter le budget partagé ? Vous gardez une copie de vos données dans un budget perso.')) return;
+    withBusy(async () => {
+      const copy = { ...state, settings: { ...state.settings, p1: state.settings[ui.me || 'p1'], p2: '', updatedAt: Date.now() } };
       stopSync();
-      render();
-    }
+      account.profile = await cloud.leaveBudget(account.user.uid, account.profile.budgetId, copy);
+      account.members = [account.user.uid];
+      state = copy;
+      ui.me = 'p1';
+      commit();
+      await connectBudget();
+    });
   },
 };
 
@@ -702,6 +752,7 @@ document.addEventListener('input', (e) => {
     ui.me = e.target.value;
     persist();
     render();
+    if (account.user) cloud.saveProfile(account.user.uid, { ...account.profile, me: ui.me }).catch(() => {});
   }
   if (e.target.name === 'splitP1') {
     const v = Number(e.target.value);
@@ -710,14 +761,21 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('submit', (e) => {
+  if (e.target.id === 'auth-form') {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const email = String(fd.get('email')).trim();
+    const password = String(fd.get('password'));
+    return withBusy(() => (e.submitter?.value === 'signup' ? cloud.signUp(email, password) : cloud.signIn(email, password)));
+  }
   if (e.target.id !== 'settings-form') return;
   e.preventDefault();
   const fd = new FormData(e.target);
   state.settings = {
     ...state.settings,
     p1: String(fd.get('p1')).trim() || 'Moi',
-    p2: String(fd.get('p2')).trim() || 'Ma copine',
-    splitP1: Number(fd.get('splitP1')),
+    p2: String(fd.get('p2') || '').trim(),
+    splitP1: fd.has('splitP1') ? Number(fd.get('splitP1')) : state.settings.splitP1,
     updatedAt: Date.now(),
   };
   commit();
@@ -758,11 +816,12 @@ async function exportData() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-// ---------- Synchro automatique ----------
+// ---------- Compte & synchro ----------
 
-let syncCfg = load(SYNC_KEY, null);
+const account = { user: null, profile: null, members: [] };
 let syncer = null;
 const syncInfo = { status: 'off', message: '' };
+let busy = false;
 
 function setSyncStatus(status, message = '') {
   Object.assign(syncInfo, { status, message });
@@ -770,47 +829,98 @@ function setSyncStatus(status, message = '') {
   if (el) el.innerHTML = syncStatusText();
 }
 
-async function startSync() {
-  syncer?.stop();
-  syncer = null;
-  if (!syncCfg) return;
-  setSyncStatus('connecting');
-  try {
-    const adapter = await firestoreAdapter(syncCfg.config, syncCfg.code);
-    syncer = createSync(adapter, {
-      getState: () => state,
-      onRemote: (merged) => {
-        state = merged;
-        persist();
-        // Ne pas effacer un formulaire en cours de saisie dans les réglages.
-        if (!$('#screen').contains(document.activeElement) || document.activeElement === document.body) render();
-      },
-      onStatus: setSyncStatus,
-    });
-  } catch (err) {
-    setSyncStatus(navigator.onLine ? 'error' : 'offline', err?.message);
-    window.addEventListener('online', startSync, { once: true });
-  }
-}
+// Ne pas effacer un formulaire en cours de saisie.
+const safeRender = () => {
+  const el = document.activeElement;
+  if (!el || el === document.body || !$('#screen').contains(el)) render();
+};
 
-function saveSync(cfg) {
-  syncCfg = cfg;
+async function withBusy(fn) {
+  if (busy) return;
+  busy = true;
+  document.body.classList.add('busy');
   try {
-    localStorage.setItem(SYNC_KEY, JSON.stringify(cfg));
-  } catch {}
-  persist();
-  render();
-  startSync();
-  toast('Synchro activée ✨');
+    await fn();
+  } catch (err) {
+    toast(cloud.errorMessage(err));
+  } finally {
+    busy = false;
+    document.body.classList.remove('busy');
+  }
 }
 
 function stopSync() {
   syncer?.stop();
   syncer = null;
-  syncCfg = null;
-  setSyncStatus('off');
+}
+
+async function connectBudget() {
+  stopSync();
+  setSyncStatus('connecting');
   try {
-    localStorage.removeItem(SYNC_KEY);
+    const adapter = await cloud.budgetAdapter(account.profile.budgetId);
+    syncer = createSync(adapter, {
+      getState: () => state,
+      onRemote: (merged) => {
+        state = merged;
+        persist();
+        safeRender();
+      },
+      onStatus: (status, message) => setSyncStatus(status, status === 'error' ? cloud.errorMessage({ message }) : ''),
+    });
+  } catch (err) {
+    setSyncStatus('error', cloud.errorMessage(err));
+  }
+}
+
+function disconnect() {
+  stopSync();
+  Object.assign(account, { user: null, profile: null, members: [] });
+  setSyncStatus('off');
+}
+
+cloud.watchMembers((members) => {
+  const changed = members.length !== account.members.length;
+  account.members = members;
+  if (changed && ui.tab === 'settings') safeRender();
+});
+
+async function onSignedIn(user) {
+  if (account.user?.uid === user.uid) return;
+  account.user = user;
+  try {
+    let profile = await cloud.getProfile(user.uid);
+    const invite = loadPendingJoin();
+    if (invite) {
+      savePendingJoin(null);
+      const budgetId = invite.split('.')[0];
+      if (profile?.budgetId !== budgetId && confirm('Rejoindre le budget partagé ? Ce que vous avez déjà noté y sera ajouté.')) {
+        profile = await cloud.joinBudget(user.uid, invite);
+        ui.tab = 'home';
+        toast('Budget partagé rejoint 🎉');
+      }
+    }
+    // Premier passage : le budget du compte est créé avec ce qui est déjà noté ici.
+    account.profile = profile || (await cloud.createBudget(user.uid, state, 'p1'));
+    ui.me = account.profile.me || 'p1';
+    persist();
+    render();
+    await connectBudget();
+  } catch (err) {
+    toast(cloud.errorMessage(err));
+    setSyncStatus('error', cloud.errorMessage(err));
+    render();
+  }
+}
+
+function loadPendingJoin() {
+  return load(JOIN_KEY, null);
+}
+
+function savePendingJoin(invite) {
+  try {
+    if (invite) localStorage.setItem(JOIN_KEY, JSON.stringify(invite));
+    else localStorage.removeItem(JOIN_KEY);
   } catch {}
 }
 
@@ -823,19 +933,23 @@ async function copyText(text, msg) {
   }
 }
 
-// Ouverture d'un lien d'invitation : …/#join=…
+// Ouverture d'un lien d'invitation : …/#join=<budgetId>.<jeton>
 function handleInvite() {
   if (!location.hash.startsWith('#join=')) return;
-  const invite = decodeInvite(location.hash.slice(6));
+  const invite = location.hash.slice(6);
   history.replaceState(null, '', location.pathname + location.search);
-  if (!invite) return toast('Lien d’invitation invalide');
-  if (syncCfg?.code === invite.code) return toast('Déjà connecté à ce budget');
-  const who = invite.from ? ` de ${invite.from}` : '';
-  if (!confirm(`Rejoindre le budget partagé${who} ? Ce qui est déjà noté sur ce téléphone sera ajouté au budget commun.`)) return;
-  const inviter = ['p1', 'p2'].find((p) => state.settings[p] === invite.from);
-  ui.me = inviter === 'p1' || !inviter ? 'p2' : 'p1';
-  ui.tab = 'home';
-  saveSync({ config: invite.config, code: invite.code });
+  if (!cloud.cloudEnabled || !/^[\w-]+\.[\w-]{20,}$/.test(invite)) return toast('Lien d’invitation invalide');
+  savePendingJoin(invite);
+  if (account.user) {
+    // Déjà connecté : on rejoue la connexion pour traiter l'invitation.
+    const user = account.user;
+    disconnect();
+    onSignedIn(user);
+  } else {
+    ui.tab = 'settings';
+    render();
+    toast('Connectez-vous pour rejoindre le budget');
+  }
 }
 
 // ---------- Démarrage ----------
@@ -843,7 +957,15 @@ function handleInvite() {
 render();
 handleInvite();
 window.addEventListener('hashchange', handleInvite);
-if (syncCfg && !syncer) startSync();
+if (cloud.cloudEnabled) {
+  cloud.onUser((user) => {
+    if (user) onSignedIn(user);
+    else if (account.user) {
+      disconnect();
+      render();
+    }
+  }).catch(() => setSyncStatus('offline'));
+}
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

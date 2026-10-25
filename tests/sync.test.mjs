@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSync, parseFirebaseConfig, encodeInvite, decodeInvite, newCoupleCode } from '../sync.js';
+import { createSync, randomToken } from '../sync.js';
 
 // Faux Firestore : un document partagé, notifications asynchrones comme le vrai.
 function fakeServer() {
@@ -67,22 +67,8 @@ test('deux téléphones convergent, suppressions comprises, sans boucle infinie'
   b.sync.stop();
 });
 
-test('lecture de la config Firebase collée depuis la console', () => {
-  const snippet = `const firebaseConfig = {
-    apiKey: "AIzaSyX",
-    authDomain: "budget-duo.firebaseapp.com",
-    projectId: "budget-duo",
-    appId: "1:123:web:abc"
-  };`;
-  assert.deepEqual(parseFirebaseConfig(snippet), {
-    apiKey: 'AIzaSyX', authDomain: 'budget-duo.firebaseapp.com', projectId: 'budget-duo', appId: '1:123:web:abc',
-  });
-  assert.equal(parseFirebaseConfig('n’importe quoi'), null);
-});
-
-test('lien d’invitation aller-retour', () => {
-  const sync = { config: { apiKey: 'k', projectId: 'p', appId: 'a' }, code: newCoupleCode(), from: 'Donald é' };
-  assert.equal(sync.code.length, 24);
-  assert.deepEqual(decodeInvite(encodeInvite(sync)), sync);
-  assert.equal(decodeInvite('%%%'), null);
+test('jetons d’invitation aléatoires', () => {
+  const a = randomToken();
+  assert.match(a, /^[\w-]{24}$/);
+  assert.notEqual(a, randomToken());
 });
